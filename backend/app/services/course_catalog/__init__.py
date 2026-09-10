@@ -22,12 +22,11 @@ def register_provider(name: str, factory: ProviderFactory) -> None:
 
 
 def _ensure_builtins() -> None:
-    if "golfapi" in PROVIDERS:
-        return
-# Add a line here when you drop in another adapter under providers/.
-    from app.services.course_catalog.providers.golfapi import GolfApiProvider
+    if "golfapi" not in PROVIDERS:
+        from app.services.course_catalog.providers.golfapi import GolfApiProvider
 
-    register_provider("golfapi", GolfApiProvider)
+        register_provider("golfapi", GolfApiProvider)
+    # Further adapters: if "foo" not in PROVIDERS: register_provider("foo", FooProvider)
 
 
 def get_provider(name: str | None = None) -> CourseCatalogProvider | None:

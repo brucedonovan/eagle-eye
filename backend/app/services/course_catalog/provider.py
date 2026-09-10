@@ -8,7 +8,8 @@ To drop in another API:
 1. Subclass ``CourseCatalogProvider`` in ``providers/<name>.py``.
 2. Map that vendor's JSON onto ``CourseHit`` / ``CourseRecord``
    (points are ``{hole, kind, lat, lon}`` with kind in green/pin/tee/…).
-3. Call ``register_provider("name", YourProvider)``.
+3. Register it in ``_ensure_builtins()`` (or call
+   ``register_provider("name", YourProvider)`` at process start).
 4. Set ``COURSE_CATALOG_PROVIDER=name`` and that vendor's credentials.
 """
 

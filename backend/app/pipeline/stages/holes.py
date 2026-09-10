@@ -776,7 +776,8 @@ def _parse_ref(value: Any) -> int | None:
 
 
 def _apply_catalog_scorecard(ctx: PipelineContext, props: dict[str, Any], number: int) -> None:
-    scorecard = (ctx.course or {}).get("catalog_scorecard") or (ctx.course or {}).get("golfapi_scorecard") or {}
+    course = ctx.course or {}
+    scorecard = course.get("catalog_scorecard") or course.get("golfapi_scorecard") or {}
     if not scorecard or number < 1:
         return
     idx = number - 1
