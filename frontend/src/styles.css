@@ -12,6 +12,7 @@
   --bad: #e07a6a;
   --src-api: #8fd14f;
   --src-osm: #6eb6f5;
+  --src-ai: #e879f9;
   --src-generated: #e0b45a;
   --src-mixed: #c4b5e8;
   --serif: "Source Serif 4", Georgia, serif;
@@ -259,8 +260,20 @@ button.ghost:disabled { opacity: 0.5; cursor: wait; }
 }
 .layer-title.origin-api { color: var(--src-api); }
 .layer-title.origin-osm { color: var(--src-osm); }
+.layer-title.origin-ai { color: var(--src-ai); }
 .layer-title.origin-generated { color: var(--src-generated); }
 .layer-title.origin-mixed { color: var(--src-mixed); }
+.group-label {
+  margin: 8px 0 4px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.layer-group.ai {
+  margin-top: 10px;
+  padding-top: 6px;
+  border-top: 1px solid rgba(232, 121, 249, 0.22);
+}
+.group-label.origin-ai { color: var(--src-ai); }
 .layer-origin-legend {
   display: flex;
   gap: 12px;
@@ -270,6 +283,7 @@ button.ghost:disabled { opacity: 0.5; cursor: wait; }
 }
 .layer-origin-legend .origin-api { color: var(--src-api); }
 .layer-origin-legend .origin-osm { color: var(--src-osm); }
+.layer-origin-legend .origin-ai { color: var(--src-ai); }
 .layer-origin-legend .origin-generated { color: var(--src-generated); }
 .layer-origin-legend .origin-mixed { color: var(--src-mixed); }
 .swatch {

@@ -524,17 +524,24 @@ _POI_MAP = {
     "water": "water",
     "hazard": "water",
     "dogleg": "dogleg",
+    "tree": "tree",
+    "trees": "tree",
+    "wood": "tree",
+    "woods": "tree",
 }
 
 # golfapi.io GPS uses numeric POI ids, not names.
 # Spatially: 1=green (location 1/2/3 = front/middle/back), 12=tee, 11=fairway,
-# 2/3=bunker, 4=water.
+# 2/3=bunker, 4=water, 5=dogleg. 6/9 sit off the landing zone and are used as
+# canopy / landscape examples for tree polygons.
 _POI_CODES = {
     "1": "green",
     "2": "bunker",
     "3": "bunker",
     "4": "water",
     "5": "dogleg",
+    "6": "tree",
+    "9": "tree",
     "11": "fairway",
     "12": "tee",
 }

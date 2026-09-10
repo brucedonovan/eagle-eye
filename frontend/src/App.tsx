@@ -4,13 +4,29 @@ import { createCourse, downloadUrl, getLayers, getStatus, listCachedCourses, sea
 
 const FORMATS = ["geojson", "kml", "gpx", "wkt", "dxf", "gpkg", "shp", "ros_grid"] as const;
 
-type LayerOrigin = "api" | "osm" | "generated" | "mixed";
+type LayerOrigin = "api" | "osm" | "ai" | "generated" | "mixed";
 
 const ORIGIN_LABEL: Record<LayerOrigin, string> = {
   api: "API",
   osm: "OSM",
+  ai: "AI",
   generated: "generated",
   mixed: "mixed",
+};
+
+const GROUP_ORDER = ["site", "play", "hazard", "access", "practice", "built", "veg", "ai", "nav", "other"];
+
+const GROUP_LABEL: Record<string, string> = {
+  site: "Site",
+  play: "Play",
+  hazard: "Hazard",
+  access: "Access",
+  practice: "Practice",
+  built: "Built",
+  veg: "Vegetation",
+  ai: "AI",
+  nav: "Navigation",
+  other: "Other",
 };
 
 function cachedCovers(cached: CourseSearchItem[], example: string): boolean {
@@ -27,6 +43,7 @@ function originBucket(raw?: string | null): LayerOrigin {
   const value = (raw || "").trim().toLowerCase();
   if (value === "api" || value === "golfapi" || value === "catalog" || value === "fake") return "api";
   if (value === "osm" || value === "openstreetmap" || value === "osm_refined") return "osm";
+  if (value === "ai" || value === "ai_layer" || value === "ai_fusion") return "ai";
   if (value === "mixed" || value === "hybrid") return "mixed";
   return "generated";
 }
@@ -90,7 +107,11 @@ export default function App() {
     for (const layer of status?.layers ?? []) {
       (grouped[layer.group] ??= []).push(layer);
     }
-    return grouped;
+    const ordered = GROUP_ORDER
+      .filter((group) => grouped[group]?.length)
+      .map((group) => [group, grouped[group]] as const);
+    const extra = Object.entries(grouped).filter(([group]) => !GROUP_ORDER.includes(group));
+    return [...ordered, ...extra];
   }, [status]);
 
   const clubGroups = useMemo(() => {
@@ -329,14 +350,17 @@ export default function App() {
               <div className="layer-origin-legend" title="Polygon and POI source">
                 <span className="origin-api">API</span>
                 <span className="origin-osm">OSM</span>
+                <span className="origin-ai">AI</span>
                 <span className="origin-generated">generated</span>
                 <span className="origin-mixed">mixed</span>
               </div>
-              {Object.entries(groups).map(([group, items]) => (
-                <div key={group}>
-                  <div className="meta" style={{ margin: "8px 0 4px", textTransform: "uppercase", letterSpacing: "0.06em" }}>{group}</div>
+              {groups.map(([group, items]) => (
+                <div key={group} className={group === "ai" ? "layer-group ai" : "layer-group"}>
+                  <div className={`meta group-label ${group === "ai" ? "origin-ai" : ""}`}>
+                    {GROUP_LABEL[group] || group}
+                  </div>
                   {items.map((layer) => {
-                    const origin = layerOrigin(layer.layer_id, layers, layer.source);
+                    const origin = group === "ai" ? "ai" : layerOrigin(layer.layer_id, layers, layer.source);
                     return (
                       <div className="layer" key={layer.layer_id}>
                         <span className="swatch" style={{ background: layer.color }} />

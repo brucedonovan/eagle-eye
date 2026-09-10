@@ -46,6 +46,13 @@ LAYERS: tuple[LayerSpec, ...] = (
     LayerSpec("natural_rough", "Natural rough", "polygon", "play", "#556b2f", ("golf=rough", "natural=grassland"), "costly"),
     LayerSpec("managed_rough", "Managed rough", "polygon", "play", "#6b8e23", ("golf=rough", "landuse=grass"), "costly"),
     LayerSpec("hole_centerline", "Hole centerlines", "linestring", "play", "#ffffff", ("golf=hole",), None, True),
+    LayerSpec("ai_green", "AI greens", "polygon", "ai", "#9aff4a", (), "costly"),
+    LayerSpec("ai_green_fringe", "AI green fringes", "polygon", "ai", "#d4f06a", (), "costly"),
+    LayerSpec("ai_first_cut", "AI first-cut rough", "polygon", "ai", "#8fbc3a", (), "costly"),
+    LayerSpec("ai_rough", "AI rough", "polygon", "ai", "#4a5d23", (), "costly"),
+    LayerSpec("ai_fairway", "AI fairways", "polygon", "ai", "#4caf50", (), "free"),
+    LayerSpec("ai_water", "AI water hazards", "polygon", "ai", "#38bdf8", (), "no_go"),
+    LayerSpec("ai_tree", "AI trees", "polygon", "ai", "#166534", (), "obstacle"),
     LayerSpec("no_go", "No-go zones", "polygon", "nav", "#ff0000", (), "no_go"),
     LayerSpec("obstacle", "Obstacle polygons", "polygon", "nav", "#8b0000", (), "obstacle"),
     LayerSpec("mowing_sector", "Mowing sectors", "polygon", "nav", "#32cd32", (), "free"),
@@ -78,6 +85,7 @@ SEMANTIC_CLASSES = (
     "putting_green",
     "natural_rough",
     "managed_rough",
+    "first_cut",
 )
 
 # OSM golf=* values mapped to catalog ids

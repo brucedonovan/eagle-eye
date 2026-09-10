@@ -6,6 +6,7 @@ from typing import Any
 
 API_SOURCES = frozenset({"golfapi", "catalog", "fake"})
 OSM_SOURCES = frozenset({"openstreetmap", "osm", "osm_refined"})
+AI_SOURCES = frozenset({"ai", "ai_layer", "ai_fusion"})
 
 
 def origin_bucket(source: Any) -> str:
@@ -14,6 +15,8 @@ def origin_bucket(source: Any) -> str:
         return "api"
     if raw in OSM_SOURCES:
         return "osm"
+    if raw in AI_SOURCES:
+        return "ai"
     return "generated"
 
 

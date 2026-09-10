@@ -96,6 +96,8 @@ def test_parse_golfapi_numeric_poi_codes():
             {"poi": 1, "location": 2, "hole": 10, "latitude": 38.7141, "longitude": -9.2514},
             {"poi": 2, "location": 1, "hole": 1, "latitude": 38.713, "longitude": -9.252},
             {"poi": 11, "location": 2, "hole": 1, "latitude": 38.7132, "longitude": -9.2525},
+            {"poi": 9, "location": 2, "hole": 1, "latitude": 38.7134, "longitude": -9.2528},
+            {"poi": 6, "location": 2, "hole": 1, "latitude": 38.7135, "longitude": -9.2529},
         ]
     }
     pts = parse_coordinates(payload, num_holes=9)
@@ -105,6 +107,8 @@ def test_parse_golfapi_numeric_poi_codes():
     assert ("tee", 1) in by_kind
     assert ("bunker", 1) in by_kind
     assert ("fairway", 1) in by_kind
+    assert ("tree", 1) in by_kind
+    assert sum(1 for p in pts if p["kind"] == "tree") == 2
     assert all(p["hole"] != 10 for p in pts)
     assert sum(1 for p in pts if p["kind"] == "pin") == 1
 
@@ -587,9 +591,11 @@ def test_layer_origin_buckets_api_osm_generated():
             to_feature(Point(-9.251, 38.711), {"source": "openstreetmap"}),
         ]
     )
+    ai = feature_collection([to_feature(box(-9.26, 38.70, -9.25, 38.71), {"source": "ai"})])
     assert layer_origin(api) == "api"
     assert layer_origin(osm) == "osm"
     assert layer_origin(generated) == "generated"
+    assert layer_origin(ai) == "ai"
     assert layer_origin(mixed) == "mixed"
     assert layer_origin(feature_collection([])) == "hybrid"
     assert layer_origin(feature_collection([to_feature(Point(-9.25, 38.71), {})])) == "generated"

@@ -18,6 +18,9 @@ INSTANCE_LAYERS = (
     "water",
     "lake",
     "parking",
+    "ai_green",
+    "ai_water",
+    "ai_tree",
 )
 
 

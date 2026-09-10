@@ -363,3 +363,49 @@ def test_extract_play_trees_from_dark_canopy():
     assert found
     assert found[0]["properties"]["source"] == "imagery"
     assert found[0]["geometry"]["type"] == "Point"
+
+
+def test_derive_first_cut_is_collar_not_fairway():
+    from app.services.ai_layers import derive_first_cut
+
+    fairway = box(-9.2530, 38.7128, -9.2518, 38.7136)
+    mid = fairway.centroid
+    fc = feature_collection([to_feature(fairway, {"hole": 4, "golf": "fairway"})])
+    cuts = derive_first_cut(fc)
+    assert cuts
+    ring = as_geom(cuts[0])
+    assert not ring.contains(mid)
+    assert area_m2(ring) > 15
+    assert cuts[0]["properties"]["source"] == "ai"
+    assert cuts[0]["properties"]["golf"] == "first_cut"
+    assert cuts[0]["properties"]["hole"] == 4
+
+
+def test_build_ai_layers_from_imagery_and_api_trees():
+    from app.services.ai_layers import build_ai_layers
+
+    rgb, geo = _synthetic_mosaic()
+    rgb[18:30, 58:72] = (22, 62, 28)
+    result = analyze_mosaic(rgb, geo, {})
+    tree_lon, tree_lat = geo.pixel_to_lonlat(65, 24)
+    layers = build_ai_layers(
+        osm_layers={
+            "fairway": feature_collection(
+                [to_feature(box(0.00010, 0.00010, 0.00055, 0.00055), {"golf": "fairway", "hole": 1})]
+            ),
+            "green": feature_collection([]),
+            "tree": feature_collection([]),
+        },
+        catalog_points=[{"kind": "tree", "lat": tree_lat, "lon": tree_lon, "hole": 1}],
+        result=result,
+        rgb=rgb,
+        geo=geo,
+    )
+    assert layers["ai_green"]
+    assert all(f["properties"]["source"] == "ai" for f in layers["ai_green"])
+    assert layers["ai_green_fringe"]
+    assert layers["ai_first_cut"]
+    assert all(f["properties"]["source"] == "ai" for f in layers["ai_first_cut"])
+    assert layers["ai_tree"]
+    assert layers["ai_tree"][0]["geometry"]["type"] in {"Polygon", "MultiPolygon"}
+    assert layers["ai_tree"][0]["properties"]["source"] == "ai"

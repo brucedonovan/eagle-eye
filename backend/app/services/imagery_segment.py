@@ -896,6 +896,7 @@ def derive_green_fringes(
     subtract: list[BaseGeometry] | None = None,
     boundary: BaseGeometry | None = None,
     width_m: float = FRINGE_WIDTH_M,
+    source: str = "imagery_fringe",
 ) -> list[dict]:
     """Collar ring around each putting surface (buffer − green), minus hazards."""
     mask = None
@@ -929,7 +930,7 @@ def derive_green_fringes(
             if area_m2(cleaned) < 12:
                 continue
             fringe_props = {
-                "source": "imagery_fringe",
+                "source": source,
                 "golf": "fringe",
                 "instance_id": f"fringe-{props.get('instance_id') or props.get('osm_id') or i + 1}-{part_i}",
             }
@@ -1895,6 +1896,9 @@ def analyze_and_fuse(ctx: Any) -> AnalysisResult:
         }
         ctx.quality["segmentation_backend"] = "osm_prior"
         ctx.log("Segmentation: backend=osm_prior (no mosaic)")
+        from app.services.ai_layers import publish_ai_layers
+
+        publish_ai_layers(ctx)
         return AnalysisResult(backend="osm_prior", stats={"reason": "no_mosaic"})
 
     rgb = load_rgb(path)
@@ -2078,4 +2082,7 @@ def analyze_and_fuse(ctx: Any) -> AnalysisResult:
         f"pin_greens={len(pin_greens)} "
         f"trees={fusion_stats.get('trees_total', 0)}"
     )
+    from app.services.ai_layers import publish_ai_layers
+
+    publish_ai_layers(ctx, result=result, rgb=rgb, geo=geo, pin_greens=pin_greens)
     return result
