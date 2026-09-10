@@ -30,7 +30,7 @@ def _ensure_builtins() -> None:
 
 
 def get_provider(name: str | None = None) -> CourseCatalogProvider | None:
-    """Return the active catalog, or None for OpenStreetMap-only search."""
+    """Return the active catalog, or None if it is not configured."""
     _ensure_builtins()
     key = (name or settings.course_catalog_provider or "golfapi").strip().lower()
     if key in {"", "none", "off", "osm"}:

@@ -23,7 +23,7 @@ from app.schemas import (
     LayerOut,
     StatusOut,
 )
-from app.services import exporters, nominatim
+from app.services import exporters
 from app.services.course_catalog import (
     CatalogError,
     CourseCatalogProvider,
@@ -60,49 +60,14 @@ async def search_courses(
         provider = get_provider()
     except CatalogError as exc:
         raise HTTPException(400, str(exc)) from exc
+    if provider is None:
+        raise HTTPException(503, "Course catalog is not configured (missing provider credentials)")
 
-    if provider is not None:
-        try:
-            result = await provider.search(query, lat=lat, lon=lon)
-            if result.hits:
-                return _catalog_search(
-                    query, provider, result, [_from_hit(hit) for hit in result.hits[:40]]
-                )
-            fallback = await _nominatim_hits(query)
-            return _catalog_search(
-                query,
-                provider,
-                result,
-                fallback,
-                source="nominatim" if fallback else provider.id,
-                warning=f"{provider.title} returned no clubs; showing OpenStreetMap matches."
-                if fallback
-                else None,
-            )
-        except CatalogError as exc:
-            fallback = await _nominatim_hits(query)
-            if fallback:
-                return CourseSearchOut(
-                    query=query,
-                    source="nominatim",
-                    cached=False,
-                    golfapi_configured=provider.id == "golfapi",
-                    catalog_configured=True,
-                    catalog_provider=provider.id,
-                    provider_title=provider.title,
-                    warning=str(exc),
-                    courses=fallback,
-                )
-            raise HTTPException(502, str(exc)) from exc
-
-    return CourseSearchOut(
-        query=query,
-        source="nominatim",
-        cached=False,
-        catalog_configured=False,
-        warning="No course catalog is configured; search is using OpenStreetMap.",
-        courses=await _nominatim_hits(query),
-    )
+    try:
+        result = await provider.search(query, lat=lat, lon=lon)
+    except CatalogError as exc:
+        raise HTTPException(502, str(exc)) from exc
+    return _catalog_search(query, provider, result, [_from_hit(hit) for hit in result.hits[:40]])
 
 
 @api_router.post("/course", response_model=JobOut, status_code=202)
@@ -304,20 +269,15 @@ def _catalog_search(
     provider: CourseCatalogProvider,
     result: SearchResult,
     courses: list[CourseSearchItem],
-    *,
-    source: str | None = None,
-    warning: str | None = None,
 ) -> CourseSearchOut:
     return CourseSearchOut(
         query=query,
-        source=source or provider.id,
+        source=provider.id,
         cached=result.cached,
-        golfapi_configured=provider.id == "golfapi",
         catalog_configured=True,
         catalog_provider=provider.id,
         provider_title=provider.title,
         api_requests_left=result.api_requests_left,
-        warning=warning,
         courses=courses,
     )
 
@@ -341,36 +301,3 @@ def _from_hit(hit: CourseHit) -> CourseSearchItem:
         distance_km=hit.distance,
         timestamp_updated=hit.timestamp_updated,
     )
-
-
-async def _nominatim_hits(query: str) -> list[CourseSearchItem]:
-    if not query:
-        return []
-    try:
-        rows = await nominatim.search_course(query, limit=8)
-    except nominatim.NominatimError:
-        return []
-    items: list[CourseSearchItem] = []
-    for row in rows:
-        name = str(row.get("display_name") or row.get("name") or query)
-        address = row.get("address") or {}
-        try:
-            lat = float(row["lat"])
-            lon = float(row["lon"])
-        except (KeyError, TypeError, ValueError):
-            lat = lon = None
-        items.append(
-            CourseSearchItem(
-                source="nominatim",
-                club_name=name,
-                course_name=str(row.get("name") or name),
-                display_name=name,
-                city=address.get("city") or address.get("town") or address.get("village"),
-                state=address.get("state"),
-                country=address.get("country"),
-                address=name,
-                lat=lat,
-                lon=lon,
-            )
-        )
-    return items

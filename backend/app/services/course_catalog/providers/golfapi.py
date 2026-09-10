@@ -280,6 +280,10 @@ def flatten_club_search(payload: Any) -> list[CourseHit]:
                     state=opt_str(club.get("state")),
                     country=opt_str(club.get("country")),
                     address=opt_str(club.get("address")),
+                    lat=as_float(club.get("latitude") or course.get("latitude")),
+                    lon=as_float(
+                        club.get("longitude") or club.get("lng") or course.get("longitude")
+                    ),
                     num_holes=as_int(course.get("numHoles") or course.get("num_holes")) or None,
                     has_gps=truthy(course.get("hasGPS") or course.get("has_gps")),
                     distance=as_float(club.get("distance")),

@@ -136,14 +136,6 @@ def test_name_score_matches_jamor_official_vs_osm():
     )
 
 
-def test_query_variants_include_jamor():
-    from app.services.nominatim import query_variants
-
-    variants = [v.lower() for v in query_variants("Centro Nacional de Formação de Golfe do Jamor")]
-    assert any("jamor" in v for v in variants)
-    assert any("formacao" in v or "formação" in v for v in variants)
-
-
 def test_clip_drops_features_outside_course():
     layers = {
         "boundary": {"type": "FeatureCollection", "features": []},

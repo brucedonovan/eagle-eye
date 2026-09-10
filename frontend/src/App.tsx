@@ -87,18 +87,12 @@ export default function App() {
     setLayers({});
     try {
       const body: CreateCourseBody = {};
-      if (selected?.course_id && selected.source !== "nominatim") {
+      if (selected?.course_id) {
         body.catalog_provider = selected.source;
         body.catalog_course_id = selected.course_id;
         if (selected.club_id) body.catalog_club_id = selected.club_id;
         if (selected.timestamp_updated) body.catalog_timestamp_updated = selected.timestamp_updated;
         body.name = selected.display_name;
-      } else if (selected?.source === "nominatim") {
-        body.name = selected.display_name || name.trim();
-        if (selected.lat != null && selected.lon != null) {
-          body.lat = selected.lat;
-          body.lon = selected.lon;
-        }
       } else {
         const chosen = name.trim();
         if (lat && lon) {
@@ -148,7 +142,7 @@ export default function App() {
       <aside className="sidebar">
         <div className="brand">
           <h1>Eagle Eye</h1>
-          <p>Search a club, pick a course, then vectorize. Catalog scorecards and GPS are cached; OSM supplies playable polygons.</p>
+          <p>Search golfapi.io, pick a course, then vectorize. Scorecards and GPS are cached; OSM supplies playable polygons.</p>
         </div>
         <div className="search">
           <label htmlFor="course">Course or club name</label>
@@ -192,12 +186,10 @@ export default function App() {
               <h2>Search results</h2>
               <div className="meta">
                 {results.cached ? "Cached · " : ""}
-                {results.provider_title
-                  || (results.source === "nominatim" ? "OpenStreetMap" : results.source)}
+                {results.provider_title || results.source}
                 {results.api_requests_left ? ` · ${results.api_requests_left} API calls left` : ""}
                 {results.courses.length === 0 ? " · no matches" : ` · ${results.courses.length} courses`}
               </div>
-              {results.warning && <div className="meta">{results.warning}</div>}
               <div className="results">
                 {clubGroups.map(([clubKey, courses]) => (
                   <div className="result-club" key={clubKey}>

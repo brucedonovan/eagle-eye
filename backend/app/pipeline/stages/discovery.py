@@ -5,7 +5,7 @@ from __future__ import annotations
 from shapely.geometry import shape
 
 from app.pipeline.context import PipelineContext
-from app.services import nominatim, overpass
+from app.services import overpass
 from app.services.course_catalog import CatalogError, get_provider
 from app.services.course_catalog import layers as catalog_layers
 from app.services.geometry import to_feature
@@ -47,95 +47,47 @@ async def run(ctx: PipelineContext) -> None:
     catalog_id = str(req.get("catalog_course_id") or req.get("golfapi_course_id") or "").strip()
     provider_name = req.get("catalog_provider")
     if catalog_id:
-        if _active_catalog(provider_name) is None:
-            raise RuntimeError("Course catalog is not configured (missing provider credentials)")
         await _discover_from_catalog(ctx, catalog_id, provider_name=provider_name)
         return
 
     name = (req.get("name") or "").strip()
-    if _active_catalog(provider_name) is not None and name and req.get("lat") is None:
-        await _discover_from_catalog_search(ctx, name, provider_name=provider_name)
-        if ctx.course.get("catalog_course_id"):
-            return
-
-    if req.get("lat") is not None and req.get("lon") is not None:
-        lat, lon = float(req["lat"]), float(req["lon"])
-        rev = await nominatim.reverse(lat, lon)
-        address = (rev or {}).get("address") or {}
-        ctx.course = {
-            "name": req.get("name") or (rev or {}).get("name") or "Unnamed course",
-            "display_name": (rev or {}).get("display_name"),
-            "lat": lat,
-            "lon": lon,
-            "country": address.get("country"),
-            "address": (rev or {}).get("display_name"),
-            "osm_id": str((rev or {}).get("osm_id") or ""),
-            "source": "coordinates",
-        }
-        parsed = nominatim.parse_bbox(rev) if rev else None
-        pad = 0.012
-        ctx.bbox = _clamp_bbox(parsed or (lon - pad, lat - pad, lon + pad, lat + pad), lon, lat)
-        await _snap_to_golf_course(ctx, req.get("name") or ctx.course["name"])
-        ctx.log(f"Reverse-geocoded {lat:.5f},{lon:.5f}")
+    lat = _float(req.get("lat"))
+    lon = _float(req.get("lon"))
+    if name or (lat is not None and lon is not None):
+        await _discover_from_catalog_search(
+            ctx, name, lat=lat, lon=lon, provider_name=provider_name
+        )
         return
 
-    if not name:
-        raise RuntimeError("Could not locate a golf course (no name or catalog course id)")
-
-    hits = await nominatim.search_course(name)
-    if not hits:
-        raise RuntimeError(f"Could not locate a golf course named “{name}”")
-
-    best = hits[0]
-    bbox = nominatim.parse_bbox(best)
-    if not bbox:
-        lon, lat = float(best["lon"]), float(best["lat"])
-        pad = 0.012
-        bbox = (lon - pad, lat - pad, lon + pad, lat + pad)
-    address = best.get("address") or {}
-    ctx.bbox = _clamp_bbox(bbox, float(best["lon"]), float(best["lat"]))
-    ctx.course = {
-        "name": name,
-        "display_name": best.get("display_name") or name,
-        "lat": float(best["lat"]),
-        "lon": float(best["lon"]),
-        "country": address.get("country"),
-        "address": best.get("display_name"),
-        "osm_id": str(best.get("osm_id") or ""),
-        "osm_type": best.get("osm_type"),
-        "class": best.get("class"),
-        "type": best.get("type"),
-        "source": "nominatim",
-        "candidates": [
-            {"name": h.get("display_name"), "lat": h.get("lat"), "lon": h.get("lon")}
-            for h in hits[:5]
-        ],
-    }
-    await _snap_to_golf_course(ctx, name)
-    ctx.log(f"Discovered {ctx.course.get('boundary_name') or ctx.course['display_name']}")
+    raise RuntimeError("Could not locate a golf course (no name, coordinates, or catalog course id)")
 
 
-def _active_catalog(name: str | None = None):
+def _require_catalog(name: str | None = None):
     try:
-        return get_provider(name)
+        provider = get_provider(name)
     except CatalogError as exc:
         raise RuntimeError(str(exc)) from exc
+    if provider is None:
+        raise RuntimeError("Course catalog is not configured (missing provider credentials)")
+    return provider
 
 
 async def _discover_from_catalog_search(
-    ctx: PipelineContext, name: str, *, provider_name: str | None = None
+    ctx: PipelineContext,
+    name: str,
+    *,
+    lat: float | None = None,
+    lon: float | None = None,
+    provider_name: str | None = None,
 ) -> None:
+    provider = _require_catalog(provider_name)
     try:
-        provider = get_provider(provider_name)
-        if provider is None:
-            return
-        result = await provider.search(name)
+        result = await provider.search(name, lat=lat, lon=lon)
     except CatalogError as exc:
-        ctx.log(f"Course catalog search skipped: {exc}")
-        return
+        raise RuntimeError(str(exc)) from exc
     if not result.hits:
-        ctx.log(f"{provider.title} search returned no clubs")
-        return
+        label = name or (f"{lat:.5f},{lon:.5f}" if lat is not None and lon is not None else "query")
+        raise RuntimeError(f"{provider.title} returned no clubs for “{label}”")
     ctx.log(
         f"{provider.title} search {'cache hit' if result.cached else 'fetched'} ({len(result.hits)} courses)"
     )
@@ -158,9 +110,7 @@ async def _discover_from_catalog(
     timestamp_updated: int | None = None,
 ) -> None:
     req = ctx.request
-    provider = get_provider(provider_name)
-    if provider is None:
-        raise RuntimeError("No course catalog is configured")
+    provider = _require_catalog(provider_name)
     club_id = club_id or req.get("catalog_club_id") or req.get("golfapi_club_id")
     ts = timestamp_updated
     if ts is None:

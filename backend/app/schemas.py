@@ -61,12 +61,10 @@ class CourseSearchOut(BaseModel):
     query: str
     source: str
     cached: bool = False
-    golfapi_configured: bool = False
     catalog_configured: bool = False
     catalog_provider: str | None = None
     provider_title: str | None = None
     api_requests_left: str | None = None
-    warning: str | None = None
     courses: list[CourseSearchItem] = Field(default_factory=list)
 
 

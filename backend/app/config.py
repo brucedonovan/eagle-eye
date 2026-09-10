@@ -19,7 +19,6 @@ class Settings(BaseSettings):
     redis_url: str = "redis://localhost:6379/0"
 
     osm_user_agent: str = "EagleEye/0.1 (golf-course-vectorization; local-dev)"
-    nominatim_url: str = "https://nominatim.openstreetmap.org"
     overpass_url: str = "https://overpass.openstreetmap.fr/api/interpreter"
     overpass_fallbacks: str = (
         "https://overpass-api.de/api/interpreter,"

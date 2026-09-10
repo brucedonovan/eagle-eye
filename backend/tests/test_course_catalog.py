@@ -1,12 +1,22 @@
+from typing import ClassVar
+
+import pytest
+from fastapi import HTTPException
 from shapely.geometry import Point, box
 
+from app.api import search_courses
 from app.config import settings
 from app.pipeline.context import PipelineContext
 from app.pipeline.stages import discovery
 from app.schemas import CourseCreate
 from app.services.course_catalog import PROVIDERS, get_provider, register_provider
 from app.services.course_catalog.layers import fuse_layers
-from app.services.course_catalog.provider import CourseCatalogProvider, CourseHit, CourseRecord, SearchResult
+from app.services.course_catalog.provider import (
+    CourseCatalogProvider,
+    CourseHit,
+    CourseRecord,
+    SearchResult,
+)
 from app.services.course_catalog.providers.golfapi import (
     GolfApiClient,
     flatten_club_search,
@@ -25,6 +35,8 @@ PEBBLE_CLUBS = {
             "state": "CA",
             "country": "USA",
             "address": "1700 17 Mile Drive",
+            "latitude": 36.568,
+            "longitude": -121.950,
             "courses": [
                 {
                     "courseID": "012141520658891108829",
@@ -55,6 +67,8 @@ def test_clubs_own_courses():
     hay = next(hit for hit in hits if hit.course_name == "The Hay")
     assert pebble.has_gps
     assert pebble.num_holes == 18
+    assert pebble.lat == 36.568
+    assert pebble.lon == -121.950
     assert pebble.display_name == "Pebble Beach Golf Links"
     assert "The Hay" in hay.display_name
 
@@ -154,12 +168,14 @@ def test_fuse_uses_provider_source_not_golfapi():
 class FakeProvider(CourseCatalogProvider):
     id = "fake"
     title = "Fake Catalog"
+    last_search: ClassVar[dict[str, object]] = {}
 
     @property
     def configured(self) -> bool:
         return True
 
     async def search(self, query: str, *, lat: float | None = None, lon: float | None = None) -> SearchResult:
+        FakeProvider.last_search = {"query": query, "lat": lat, "lon": lon}
         return SearchResult(
             provider=self.id,
             title=self.title,
@@ -238,3 +254,88 @@ async def test_discovery_uses_drop_in_catalog(work_dir, monkeypatch):
         assert ctx.bbox is not None
     finally:
         PROVIDERS.pop("fake", None)
+
+
+class EmptyProvider(FakeProvider):
+    id = "empty"
+    title = "Empty Catalog"
+
+    async def search(self, query: str, *, lat: float | None = None, lon: float | None = None) -> SearchResult:
+        return SearchResult(provider=self.id, title=self.title, cached=True, hits=[])
+
+
+async def _no_osm(lon, lat, name, pad_deg=0.03):
+    return []
+
+
+async def test_discovery_by_name_uses_catalog(work_dir, monkeypatch):
+    register_provider("fake", FakeProvider)
+    monkeypatch.setattr(settings, "course_catalog_provider", "fake")
+    monkeypatch.setattr("app.services.overpass.find_golf_courses", _no_osm)
+    FakeProvider.last_search = {}
+    try:
+        ctx = PipelineContext(
+            job_id="name-job",
+            work_dir=work_dir,
+            request={"name": "Fake Club"},
+        )
+        await discovery.run(ctx)
+        assert FakeProvider.last_search["query"] == "Fake Club"
+        assert ctx.course["source"] == "fake"
+        assert ctx.course["catalog_course_id"] == "course-1"
+    finally:
+        PROVIDERS.pop("fake", None)
+
+
+async def test_discovery_by_coordinates_uses_catalog(work_dir, monkeypatch):
+    register_provider("fake", FakeProvider)
+    monkeypatch.setattr(settings, "course_catalog_provider", "fake")
+    monkeypatch.setattr("app.services.overpass.find_golf_courses", _no_osm)
+    FakeProvider.last_search = {}
+    try:
+        ctx = PipelineContext(
+            job_id="coord-job",
+            work_dir=work_dir,
+            request={"lat": 36.57, "lon": -121.95},
+        )
+        await discovery.run(ctx)
+        assert FakeProvider.last_search == {"query": "", "lat": 36.57, "lon": -121.95}
+        assert ctx.course["catalog_course_id"] == "course-1"
+        assert ctx.course["source"] == "fake"
+    finally:
+        PROVIDERS.pop("fake", None)
+
+
+async def test_discovery_raises_when_catalog_has_no_hits(work_dir, monkeypatch):
+    register_provider("empty", EmptyProvider)
+    monkeypatch.setattr(settings, "course_catalog_provider", "empty")
+    try:
+        ctx = PipelineContext(
+            job_id="empty-job",
+            work_dir=work_dir,
+            request={"name": "Unknown Links"},
+        )
+        with pytest.raises(RuntimeError, match="returned no clubs"):
+            await discovery.run(ctx)
+    finally:
+        PROVIDERS.pop("empty", None)
+
+
+async def test_search_uses_catalog_only(monkeypatch):
+    register_provider("fake", FakeProvider)
+    monkeypatch.setattr(settings, "course_catalog_provider", "fake")
+    try:
+        out = await search_courses(q="pebble")
+        assert out.source == "fake"
+        assert out.catalog_configured is True
+        assert [course.course_id for course in out.courses] == ["course-1"]
+        assert all(course.source == "fake" for course in out.courses)
+    finally:
+        PROVIDERS.pop("fake", None)
+
+
+async def test_search_requires_configured_catalog(monkeypatch):
+    monkeypatch.setattr(settings, "course_catalog_provider", "none")
+    with pytest.raises(HTTPException) as err:
+        await search_courses(q="pebble")
+    assert err.value.status_code == 503

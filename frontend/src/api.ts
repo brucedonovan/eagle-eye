@@ -61,9 +61,7 @@ export type CourseSearchOut = {
   catalog_configured: boolean;
   catalog_provider?: string | null;
   provider_title?: string | null;
-  golfapi_configured?: boolean;
   api_requests_left?: string | null;
-  warning?: string | null;
   courses: CourseSearchItem[];
 };
 
