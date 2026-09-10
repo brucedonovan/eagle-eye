@@ -247,9 +247,9 @@ function syncHoleMarkers(
 ) {
   for (const marker of pinMarkers.current) marker.remove();
   pinMarkers.current = [];
-  const showGreen = !hidden.has("pin") || !hidden.has("hole_centerline");
-  const showFairway = !hidden.has("hole_centerline");
-  if (!showGreen && !showFairway) return;
+  const showGreen = !hidden.has("pin") || !hidden.has("green") || !hidden.has("hole_centerline");
+  const showTee = !hidden.has("tee") || !hidden.has("hole_centerline");
+  if (!showGreen && !showTee) return;
 
   const pinByHole = new Map<number, [number, number]>();
   for (const pin of numberedPins(layers)) {
@@ -262,37 +262,44 @@ function syncHoleMarkers(
   for (const hole of holeCards(layers)) {
     const green = pinByHole.get(hole.hole) ?? hole.green;
     if (showGreen && green) {
-      pinMarkers.current.push(badgeMarker(green, "green", hole));
+      pinMarkers.current.push(flagMarker(green, hole));
     }
-    if (showFairway && hole.tee && (!green || distLngLat(hole.tee, green) > 0.00012)) {
-      pinMarkers.current.push(badgeMarker(hole.tee, "tee", hole));
-    }
-    if (showFairway && hole.mid && hole.par != null) {
-      pinMarkers.current.push(parMarker(hole.mid, hole));
+    if (showTee && hole.tee && (!green || distLngLat(hole.tee, green) > 0.00012)) {
+      pinMarkers.current.push(teeMarker(hole.tee, hole));
     }
   }
   for (const marker of pinMarkers.current) marker.addTo(map);
 }
 
-function badgeMarker(lngLat: [number, number], kind: "green" | "tee", hole: HoleCard) {
+function teeMarker(lngLat: [number, number], hole: HoleCard) {
   const el = document.createElement("div");
-  el.className = kind === "tee" ? "hole-badge tee" : "hole-badge";
+  el.className = "hole-badge tee";
   const num = document.createElement("b");
-  num.textContent = kind === "tee" ? `T${hole.hole}` : String(hole.hole);
+  num.textContent = String(hole.hole);
   el.append(num);
-  if (kind === "green" && hole.par != null) {
+  if (hole.par != null) {
     const par = document.createElement("small");
     par.textContent = `Par ${hole.par}`;
     el.append(par);
   }
+  if (hole.si != null) {
+    const si = document.createElement("small");
+    si.textContent = `SI ${hole.si}`;
+    el.append(si);
+  }
   return new maplibregl.Marker({ element: el, anchor: "center" }).setLngLat(lngLat);
 }
 
-function parMarker(lngLat: [number, number], hole: HoleCard) {
+function flagMarker(lngLat: [number, number], hole: HoleCard) {
   const el = document.createElement("div");
-  el.className = "hole-par";
-  el.textContent = hole.si != null ? `H${hole.hole} · Par ${hole.par} · SI ${hole.si}` : `H${hole.hole} · Par ${hole.par}`;
-  return new maplibregl.Marker({ element: el, anchor: "center" }).setLngLat(lngLat);
+  el.className = "green-flag";
+  el.title = hole.par != null ? `Hole ${hole.hole} · Par ${hole.par}` : `Hole ${hole.hole}`;
+  el.innerHTML = `<svg viewBox="0 0 18 28" aria-hidden="true">
+    <line x1="3.5" y1="1" x2="3.5" y2="26" stroke="#111" stroke-width="1.6" stroke-linecap="round"/>
+    <path d="M4 2.2 L16.5 7.2 L4 12.4 Z" fill="#e23b2e" stroke="#111" stroke-width="1"/>
+    <circle cx="3.5" cy="26.4" r="1.7" fill="#111"/>
+  </svg>`;
+  return new maplibregl.Marker({ element: el, anchor: "bottom" }).setLngLat(lngLat);
 }
 
 function holeCards(layers: Record<string, { type: string; features: unknown[] }>): HoleCard[] {
@@ -308,6 +315,33 @@ function holeCards(layers: Record<string, { type: string; features: unknown[] }>
     const par = numProp(feat.properties, "par");
     const si = numProp(feat.properties, "stroke_index");
     byHole.set(n, { hole: n, par, si, tee, green, mid });
+  }
+  const teeBoxes = new Map<number, [number, number][]>();
+  for (const feat of (layers.tee?.features ?? []) as GeoFeat[]) {
+    const n = Number(feat.properties?.hole ?? feat.properties?.catalog_hole ?? feat.properties?.ref);
+    const coords = featureCentroid(feat);
+    if (!Number.isFinite(n) || n < 1 || !coords) continue;
+    const list = teeBoxes.get(n) ?? [];
+    list.push(coords);
+    teeBoxes.set(n, list);
+    const prev = byHole.get(n);
+    if (!prev) {
+      byHole.set(n, {
+        hole: n,
+        tee: coords,
+        par: numProp(feat.properties, "par"),
+        si: numProp(feat.properties, "stroke_index"),
+      });
+    }
+  }
+  for (const [n, boxes] of teeBoxes) {
+    const prev = byHole.get(n);
+    if (!prev) continue;
+    const target = prev.tee ?? prev.green;
+    const best = target
+      ? boxes.reduce((a, b) => (distLngLat(a, target) <= distLngLat(b, target) ? a : b))
+      : boxes[0];
+    byHole.set(n, { ...prev, tee: best });
   }
   for (const pin of numberedPins(layers)) {
     const n = Number(pin.properties?.hole);
@@ -351,6 +385,36 @@ function lineCoords(geometry?: GeoFeat["geometry"]): [number, number][] | null {
     if (pair) out.push(pair);
   }
   return out.length >= 2 ? out : null;
+}
+
+function featureCentroid(feat: GeoFeat): [number, number] | null {
+  const geom = feat.geometry;
+  if (!geom) return null;
+  if (geom.type === "Point") return asLngLat(geom.coordinates);
+  const ring = outerRing(geom.coordinates);
+  if (!ring || ring.length < 3) return null;
+  let sx = 0;
+  let sy = 0;
+  let n = 0;
+  for (const pt of ring) {
+    const pair = asLngLat(pt);
+    if (!pair) continue;
+    sx += pair[0];
+    sy += pair[1];
+    n += 1;
+  }
+  return n ? [sx / n, sy / n] : null;
+}
+
+function outerRing(coordinates: unknown): unknown[] | null {
+  if (!Array.isArray(coordinates) || coordinates.length === 0) return null;
+  const first = coordinates[0];
+  if (!Array.isArray(first) || first.length === 0) return null;
+  if (typeof first[0] === "number") return coordinates;
+  const nested = first[0];
+  if (Array.isArray(nested) && typeof nested[0] === "number") return first as unknown[];
+  if (Array.isArray(nested) && Array.isArray(nested[0])) return nested as unknown[];
+  return null;
 }
 
 function asLngLat(value: unknown): [number, number] | null {
