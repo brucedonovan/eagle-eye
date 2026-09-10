@@ -33,6 +33,35 @@ export type StatusOut = {
   exports: string[];
 };
 
+export type CourseSearchItem = {
+  source: "golfapi" | "nominatim" | string;
+  club_id?: string | null;
+  club_name: string;
+  course_id?: string | null;
+  course_name: string;
+  display_name: string;
+  city?: string | null;
+  state?: string | null;
+  country?: string | null;
+  address?: string | null;
+  lat?: number | null;
+  lon?: number | null;
+  num_holes?: number | null;
+  has_gps?: boolean;
+  distance_km?: number | null;
+  timestamp_updated?: number | null;
+};
+
+export type CourseSearchOut = {
+  query: string;
+  source: string;
+  cached: boolean;
+  golfapi_configured: boolean;
+  api_requests_left?: string | null;
+  warning?: string | null;
+  courses: CourseSearchItem[];
+};
+
 export type LayerCatalogItem = {
   id: string;
   title: string;

@@ -16,17 +16,64 @@ class CourseCreate(BaseModel):
     lat: float | None = None
     lon: float | None = None
     aoi: dict[str, Any] | None = Field(default=None, description="GeoJSON Polygon / MultiPolygon")
+    golfapi_course_id: str | None = Field(default=None, description="Deprecated alias for catalog_course_id")
+    golfapi_club_id: str | None = Field(default=None, description="Deprecated alias for catalog_club_id")
+    golfapi_timestamp_updated: int | None = Field(default=None, description="Deprecated alias")
+    catalog_provider: str | None = None
+    catalog_course_id: str | None = None
+    catalog_club_id: str | None = None
+    catalog_timestamp_updated: int | None = None
     include_navigation: bool = True
     include_imagery: bool = True
 
     @model_validator(mode="after")
     def require_input(self) -> CourseCreate:
+        if self.golfapi_course_id and not self.catalog_course_id:
+            self.catalog_course_id = self.golfapi_course_id
+            self.catalog_provider = self.catalog_provider or "golfapi"
+        if self.golfapi_club_id and not self.catalog_club_id:
+            self.catalog_club_id = self.golfapi_club_id
+        if self.golfapi_timestamp_updated is not None and self.catalog_timestamp_updated is None:
+            self.catalog_timestamp_updated = self.golfapi_timestamp_updated
         has_name = bool(self.name and self.name.strip())
         has_point = self.lat is not None and self.lon is not None
         has_aoi = self.aoi is not None
-        if not (has_name or has_point or has_aoi):
-            raise ValueError("Provide a course name, lat/lon, or an AOI polygon")
+        has_catalog = bool(self.catalog_course_id and self.catalog_course_id.strip())
+        if not (has_name or has_point or has_aoi or has_catalog):
+            raise ValueError("Provide a course name, catalog course id, lat/lon, or an AOI polygon")
         return self
+
+
+class CourseSearchItem(BaseModel):
+    source: str
+    club_id: str | None = None
+    club_name: str
+    course_id: str | None = None
+    course_name: str
+    display_name: str
+    city: str | None = None
+    state: str | None = None
+    country: str | None = None
+    address: str | None = None
+    lat: float | None = None
+    lon: float | None = None
+    num_holes: int | None = None
+    has_gps: bool = False
+    distance_km: float | None = None
+    timestamp_updated: int | None = None
+
+
+class CourseSearchOut(BaseModel):
+    query: str
+    source: str
+    cached: bool = False
+    golfapi_configured: bool = False
+    catalog_configured: bool = False
+    catalog_provider: str | None = None
+    provider_title: str | None = None
+    api_requests_left: str | None = None
+    warning: str | None = None
+    courses: list[CourseSearchItem] = Field(default_factory=list)
 
 
 class CourseOut(BaseModel):

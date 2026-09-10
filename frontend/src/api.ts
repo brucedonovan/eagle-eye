@@ -1,11 +1,31 @@
-import type { StatusOut } from "./types";
+import type { CourseSearchOut, StatusOut } from "./types";
 
 const BASE = "/api";
+
+export async function searchCourses(body: {
+  q: string;
+  lat?: number;
+  lon?: number;
+}): Promise<CourseSearchOut> {
+  const params = new URLSearchParams();
+  if (body.q.trim()) params.set("q", body.q.trim());
+  if (body.lat != null) params.set("lat", String(body.lat));
+  if (body.lon != null) params.set("lon", String(body.lon));
+  const res = await fetch(`${BASE}/search?${params.toString()}`);
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(text || res.statusText);
+  }
+  return res.json();
+}
 
 export async function createCourse(body: {
   name?: string;
   lat?: number;
   lon?: number;
+  golfapi_course_id?: string;
+  golfapi_club_id?: string;
+  golfapi_timestamp_updated?: number;
 }): Promise<{ job_id: string }> {
   const res = await fetch(`${BASE}/course`, {
     method: "POST",

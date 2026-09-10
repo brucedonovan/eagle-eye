@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { MapView } from "./components/MapView";
-import { createCourse, downloadUrl, getLayers, getStatus } from "./api";
-import type { StatusOut } from "./types";
+import { createCourse, downloadUrl, getLayers, getStatus, searchCourses } from "./api";
+import type { CourseSearchItem, CourseSearchOut, StatusOut } from "./types";
 
 const EXAMPLES = [
   "Pebble Beach Golf Links",
@@ -16,7 +16,10 @@ export default function App() {
   const [lat, setLat] = useState("");
   const [lon, setLon] = useState("");
   const [busy, setBusy] = useState(false);
+  const [searching, setSearching] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [results, setResults] = useState<CourseSearchOut | null>(null);
+  const [selected, setSelected] = useState<CourseSearchItem | null>(null);
   const [status, setStatus] = useState<StatusOut | null>(null);
   const [layers, setLayers] = useState<Record<string, { type: string; features: unknown[] }>>({});
   const [hidden, setHidden] = useState<Set<string>>(new Set(["nav_mesh", "no_go", "waypoint_graph", "coverage"]));
@@ -43,19 +46,75 @@ export default function App() {
     return grouped;
   }, [status]);
 
-  async function submit(courseName?: string) {
+  const clubGroups = useMemo(() => {
+    const byClub = new Map<string, CourseSearchItem[]>();
+    for (const course of results?.courses ?? []) {
+      const key = course.club_id || course.club_name;
+      const list = byClub.get(key) ?? [];
+      list.push(course);
+      byClub.set(key, list);
+    }
+    return [...byClub.entries()];
+  }, [results]);
+
+  async function search(query?: string) {
+    setError(null);
+    setSearching(true);
+    setSelected(null);
+    try {
+      const chosen = (query ?? name).trim();
+      const body: { q: string; lat?: number; lon?: number } = { q: chosen };
+      if (lat && lon) {
+        body.lat = Number(lat);
+        body.lon = Number(lon);
+      }
+      const payload = await searchCourses(body);
+      setResults(payload);
+      if (payload.courses.length === 1) {
+        setSelected(payload.courses[0]);
+        setName(payload.courses[0].display_name);
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Search failed");
+      setResults(null);
+    } finally {
+      setSearching(false);
+    }
+  }
+
+  async function submit() {
     setError(null);
     setBusy(true);
     setLayers({});
     try {
-      const body: { name?: string; lat?: number; lon?: number } = {};
-      const chosen = (courseName ?? name).trim();
-      if (lat && lon) {
-        body.lat = Number(lat);
-        body.lon = Number(lon);
-        if (chosen) body.name = chosen;
+      const body: {
+        name?: string;
+        lat?: number;
+        lon?: number;
+        golfapi_course_id?: string;
+        golfapi_club_id?: string;
+        golfapi_timestamp_updated?: number;
+      } = {};
+      if (selected?.source === "golfapi" && selected.course_id) {
+        body.golfapi_course_id = selected.course_id;
+        if (selected.club_id) body.golfapi_club_id = selected.club_id;
+        if (selected.timestamp_updated) body.golfapi_timestamp_updated = selected.timestamp_updated;
+        body.name = selected.display_name;
+      } else if (selected?.source === "nominatim") {
+        body.name = selected.display_name || name.trim();
+        if (selected.lat != null && selected.lon != null) {
+          body.lat = selected.lat;
+          body.lon = selected.lon;
+        }
       } else {
-        body.name = chosen;
+        const chosen = name.trim();
+        if (lat && lon) {
+          body.lat = Number(lat);
+          body.lon = Number(lon);
+          if (chosen) body.name = chosen;
+        } else {
+          body.name = chosen;
+        }
       }
       const created = await createCourse(body);
       const next = await getStatus(created.job_id);
@@ -65,6 +124,13 @@ export default function App() {
     } finally {
       setBusy(false);
     }
+  }
+
+  function pick(course: CourseSearchItem) {
+    setSelected(course);
+    setName(course.display_name);
+    if (course.lat != null) setLat(String(course.lat));
+    if (course.lon != null) setLon(String(course.lon));
   }
 
   function toggle(id: string) {
@@ -89,28 +155,86 @@ export default function App() {
       <aside className="sidebar">
         <div className="brand">
           <h1>Eagle Eye</h1>
-          <p>Name a course. The pipeline discovers it, fuses OSM priors with imagery, and exports a GIS / robotics dataset.</p>
+          <p>Search a club, pick a course, then vectorize. Golf API scorecards and GPS are cached; OSM supplies playable polygons.</p>
         </div>
         <div className="search">
-          <label htmlFor="course">Course name</label>
-          <input id="course" value={name} onChange={(e) => setName(e.target.value)} placeholder="Pebble Beach Golf Links" />
+          <label htmlFor="course">Course or club name</label>
+          <input
+            id="course"
+            value={name}
+            onChange={(e) => { setName(e.target.value); setSelected(null); }}
+            onKeyDown={(e) => { if (e.key === "Enter") void search(); }}
+            placeholder="Pebble Beach Golf Links"
+          />
           <div className="row coord">
             <input value={lat} onChange={(e) => setLat(e.target.value)} placeholder="Latitude" />
             <input value={lon} onChange={(e) => setLon(e.target.value)} placeholder="Longitude" />
           </div>
-          <button className="primary" disabled={busy} onClick={() => void submit()}>
-            {busy ? "Queuing…" : "Vectorize course"}
-          </button>
+          <div className="row">
+            <button className="ghost" disabled={searching || busy} onClick={() => void search()}>
+              {searching ? "Searching…" : "Search"}
+            </button>
+            <button className="primary" disabled={busy} onClick={() => void submit()}>
+              {busy ? "Queuing…" : selected ? "Vectorize selected" : "Vectorize course"}
+            </button>
+          </div>
         </div>
         <div className="examples">
           {EXAMPLES.map((example) => (
-            <button key={example} onClick={() => { setName(example); void submit(example); }}>
+            <button
+              key={example}
+              onClick={() => {
+                setName(example);
+                void search(example);
+              }}
+            >
               {example}
             </button>
           ))}
         </div>
         <div className="scroll">
           {error && <div className="card error">{error}</div>}
+          {results && (
+            <div className="card">
+              <h2>Search results</h2>
+              <div className="meta">
+                {results.cached ? "Cached · " : ""}
+                {results.source === "golfapi" ? "Golf API clubs" : "OpenStreetMap"}
+                {results.api_requests_left ? ` · ${results.api_requests_left} API calls left` : ""}
+                {results.courses.length === 0 ? " · no matches" : ` · ${results.courses.length} courses`}
+              </div>
+              {results.warning && <div className="meta">{results.warning}</div>}
+              <div className="results">
+                {clubGroups.map(([clubKey, courses]) => (
+                  <div className="result-club" key={clubKey}>
+                    <div className="result-club-name">{courses[0].club_name}</div>
+                    <div className="result-club-meta">
+                      {[courses[0].city, courses[0].state, courses[0].country].filter(Boolean).join(", ")}
+                    </div>
+                    {courses.map((course) => {
+                      const active = selected?.course_id
+                        ? selected.course_id === course.course_id
+                        : selected?.display_name === course.display_name;
+                      return (
+                        <button
+                          type="button"
+                          key={course.course_id || course.display_name}
+                          className={`result-course ${active ? "selected" : ""}`}
+                          onClick={() => pick(course)}
+                        >
+                          <span>{course.course_name}</span>
+                          <span className="result-tags">
+                            {course.num_holes ? `${course.num_holes} holes` : ""}
+                            {course.has_gps ? " GPS" : ""}
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
           {status && (
             <div className="card">
               <h2>Pipeline</h2>

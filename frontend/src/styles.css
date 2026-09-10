@@ -99,6 +99,51 @@ button.ghost {
   color: var(--ink);
   border: 1px solid var(--line);
 }
+button.ghost:disabled { opacity: 0.5; cursor: wait; }
+
+.results {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 10px;
+}
+.result-club-name {
+  font-weight: 600;
+  font-size: 13px;
+}
+.result-club-meta {
+  color: var(--muted);
+  font-size: 12px;
+  margin: 2px 0 6px;
+}
+.result-course {
+  width: 100%;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  text-align: left;
+  background: #1a2620;
+  color: var(--ink);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 8px 10px;
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+  margin-bottom: 4px;
+}
+.result-course:hover { border-color: var(--accent); }
+.result-course.selected {
+  border-color: var(--accent);
+  background: #24351f;
+}
+.result-tags {
+  color: var(--accent-2);
+  font-size: 11px;
+  font-family: var(--mono);
+  white-space: nowrap;
+}
 
 .examples {
   padding: 0 22px 12px;

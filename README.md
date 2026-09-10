@@ -46,6 +46,7 @@ Or: `cp .env.example .env && docker compose up --build` → API on `:8000`, UI o
 
 | Method | Path | Purpose |
 | --- | --- | --- |
+| `GET` | `/search?q=` | Search Golf API clubs (cached) and list their courses |
 | `POST` | `/course` | Discover + run the full pipeline |
 | `POST` | `/segment` `/vectorize` `/navigation` | Same job entry (stage aliases) |
 | `GET` | `/status/{job_id}` | Stage, progress, quality, layer counts |
@@ -61,7 +62,7 @@ curl -s -X POST http://localhost:8000/course \
 
 ## Architecture notes
 
-**Discovery** uses Nominatim, then Overpass for `leisure=golf_course` and `golf=*` (fairway, green, tee, bunker, hole, cartpath, water hazard) plus buildings, water, woodland, and paths. Licensed place APIs can be added behind the same `Course` record.
+**Discovery** searches [Golf API](https://golfapi.io/) clubs first (`GET /clubs`). A club owns one or more courses; the UI lists those courses after you click Search. Selecting a course fetches scorecard + GPS (`GET /courses/{id}`, `GET /coordinates/{id}`) and **caches them on disk forever** so limited API tokens are not spent twice. Nominatim / Overpass still supply `leisure=golf_course` and `golf=*` polygons. Golf API wins for identity (name, hole numbers, pins, scorecard) and for the AOI when its GPS hull is tighter than a multi-course OSM boundary.
 
 **Imagery** is a ranked registry (Nearmap / Maxar / Planet / Google / Mapbox when keys exist, otherwise ESRI World Imagery, then Sentinel-2 / USGS). The course mosaic stays on public ESRI. Pins that lack an OSM green get a z19 crop from Google Static or Mapbox Satellite when a key is set, otherwise ESRI at the same zoom.
 

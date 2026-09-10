@@ -90,6 +90,7 @@ async def run(ctx: PipelineContext) -> None:
             "hazard_ids": hole.get("hazards", []),
             "source": hole.get("source", "heuristic"),
         }
+        _apply_golfapi_scorecard(ctx, props, hole["number"])
         centerlines.append(to_feature(hole["centerline"], props))
         _stamp_hole_number(ctx, "green", hole.get("green_id"), hole["number"])
         _stamp_pin_number(ctx, hole.get("pin"), hole["number"])
@@ -168,7 +169,7 @@ def _from_osm_holes(
                 "pin": None,
                 "green_id": None,
                 "tee_ids": [],
-                "source": "osm",
+                "source": props.get("source") or "osm",
                 "bunkers": [],
                 "hazards": [],
             }
@@ -771,6 +772,19 @@ def _parse_ref(value: Any) -> int | None:
         return None
     number = int(digits)
     return number if 1 <= number <= 27 else None
+
+
+def _apply_golfapi_scorecard(ctx: PipelineContext, props: dict[str, Any], number: int) -> None:
+    scorecard = (ctx.course or {}).get("golfapi_scorecard") or {}
+    if not scorecard or number < 1:
+        return
+    idx = number - 1
+    pars = scorecard.get("pars_men") or []
+    indexes = scorecard.get("indexes_men") or []
+    if idx < len(pars):
+        props["par"] = pars[idx]
+    if idx < len(indexes):
+        props["stroke_index"] = indexes[idx]
 
 
 def _stamp_hole_number(ctx: PipelineContext, layer_id: str, feature_id: Any, number: int) -> None:

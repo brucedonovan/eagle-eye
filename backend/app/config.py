@@ -38,6 +38,12 @@ class Settings(BaseSettings):
     nearmap_api_key: str = ""
     maxar_api_key: str = ""
 
+    golfapi_key: str = ""
+    golfapi_base_url: str = "https://golfapi.io/api/v2.3"
+
+    course_catalog_provider: str = "golfapi"
+    course_catalog_search_ttl_days: int = 30
+
     segmentation_backend: str = "dual_imagery_fusion"
     segmentation_weights: str = ""
 
