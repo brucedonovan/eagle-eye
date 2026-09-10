@@ -68,6 +68,10 @@ def fuse_layers(
         "greens_numbered": 0,
         "centerlines_added": 0,
         "holes_stamped": 0,
+        "bunker_seeds": 0,
+        "water_seeds": 0,
+        "fairway_seeds": 0,
+        "dogleg_seeds": 0,
         "source": source,
     }
     if not points:
@@ -75,6 +79,11 @@ def fuse_layers(
 
     pin_pts = _pins_by_hole(points)
     tee_pts = [p for p in points if p["kind"] == "tee" and _valid_ll(p)]
+    doglegs = [p for p in points if p["kind"] == "dogleg" and _valid_ll(p)]
+    stats["bunker_seeds"] = sum(1 for p in points if p.get("kind") == "bunker" and _valid_ll(p))
+    stats["water_seeds"] = sum(1 for p in points if p.get("kind") == "water" and _valid_ll(p))
+    stats["fairway_seeds"] = sum(1 for p in points if p.get("kind") == "fairway" and _valid_ll(p))
+    stats["dogleg_seeds"] = len(doglegs)
 
     stats["pins_catalog"] = len(pin_pts)
     layers["pin"] = _merge_pins(layers.get("pin"), pin_pts, stats, source=source)
@@ -85,7 +94,9 @@ def fuse_layers(
     if osm_holes:
         stats["holes_stamped"] = _stamp_hole_lines(layers["hole_centerline"], pin_pts, scorecard)
     else:
-        lines = _centerlines_from_gps(pin_pts, tee_pts, scorecard, source=source)
+        lines = _centerlines_from_gps(
+            pin_pts, tee_pts, scorecard, source=source, doglegs=doglegs
+        )
         if lines:
             layers["hole_centerline"] = feature_collection(lines)
             stats["centerlines_added"] = len(lines)
@@ -235,12 +246,18 @@ def _centerlines_from_gps(
     scorecard: dict[str, Any] | None,
     *,
     source: str,
+    doglegs: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     tees_by_hole: dict[int, list[dict[str, Any]]] = {}
     for tee in tees:
         hole = tee.get("hole")
         if hole:
             tees_by_hole.setdefault(int(hole), []).append(tee)
+    doglegs_by_hole: dict[int, list[dict[str, Any]]] = {}
+    for bend in doglegs or []:
+        hole = bend.get("hole")
+        if hole:
+            doglegs_by_hole.setdefault(int(hole), []).append(bend)
     lines = []
     for pin in pins:
         hole = pin.get("hole")
@@ -254,6 +271,7 @@ def _centerlines_from_gps(
         tee = Point(tee_pt["lon"], tee_pt["lat"])
         if tee.equals(green):
             continue
+        coords = [tee, *_dogleg_waypoints(tee, green, doglegs_by_hole.get(int(hole))), green]
         props = {
             "hole": int(hole),
             "ref": str(int(hole)),
@@ -261,8 +279,21 @@ def _centerlines_from_gps(
             "name": f"Hole {int(hole)}",
         }
         _apply_scorecard(props, int(hole), scorecard)
-        lines.append(to_feature(LineString([tee, green]), props))
+        lines.append(to_feature(LineString(coords), props))
     return lines
+
+
+def _dogleg_waypoints(tee: Point, green: Point, bends: list[dict[str, Any]] | None) -> list[Point]:
+    if not bends:
+        return []
+    ordered = sorted(bends, key=lambda row: tee.distance(Point(row["lon"], row["lat"])))
+    out: list[Point] = []
+    for row in ordered:
+        pt = Point(row["lon"], row["lat"])
+        if pt.distance(tee) < 1e-7 or pt.distance(green) < 1e-7:
+            continue
+        out.append(pt)
+    return out
 
 
 def _apply_scorecard(props: dict[str, Any], hole: int, scorecard: dict[str, Any] | None) -> None:

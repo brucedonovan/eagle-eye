@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { MapView } from "./components/MapView";
-import { createCourse, downloadUrl, getLayers, getStatus, searchCourses, type CourseSearchItem, type CourseSearchOut, type CreateCourseBody, type StatusOut } from "./api";
+import { createCourse, downloadUrl, getLayers, getStatus, listCachedCourses, searchCourses, type CourseSearchItem, type CourseSearchOut, type CreateCourseBody, type StatusOut } from "./api";
 
 const EXAMPLES = [
   "Pebble Beach Golf Links",
@@ -9,6 +9,27 @@ const EXAMPLES = [
 ];
 
 const FORMATS = ["geojson", "kml", "gpx", "wkt", "dxf", "gpkg", "shp", "ros_grid"] as const;
+
+function mergeCachedCourses(fresh: CourseSearchItem[], prev: CourseSearchItem[]): CourseSearchItem[] {
+  const byId = new Map<string, CourseSearchItem>();
+  for (const course of [...prev, ...fresh]) {
+    const key = course.course_id || course.display_name;
+    byId.set(key, course);
+  }
+  const freshIds = new Set(fresh.map((course) => course.course_id || course.display_name));
+  const rest = [...byId.values()].filter((course) => !freshIds.has(course.course_id || course.display_name));
+  return [...fresh, ...rest];
+}
+
+function cachedCovers(cached: CourseSearchItem[], example: string): boolean {
+  const needle = example.trim().toLowerCase();
+  return cached.some((course) => {
+    const names = [course.display_name, course.club_name, course.course_name]
+      .filter(Boolean)
+      .map((value) => value.toLowerCase());
+    return names.some((name) => name.includes(needle) || needle.includes(name));
+  });
+}
 
 export default function App() {
   const [name, setName] = useState("Pebble Beach Golf Links");
@@ -19,9 +40,14 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
   const [results, setResults] = useState<CourseSearchOut | null>(null);
   const [selected, setSelected] = useState<CourseSearchItem | null>(null);
+  const [cachedCourses, setCachedCourses] = useState<CourseSearchItem[]>([]);
   const [status, setStatus] = useState<StatusOut | null>(null);
   const [layers, setLayers] = useState<Record<string, { type: string; features: unknown[] }>>({});
   const [hidden, setHidden] = useState<Set<string>>(new Set(["nav_mesh", "no_go", "waypoint_graph", "coverage"]));
+
+  useEffect(() => {
+    void listCachedCourses().then(setCachedCourses).catch(() => setCachedCourses([]));
+  }, []);
 
   useEffect(() => {
     if (!status || (status.status !== "queued" && status.status !== "running")) return;
@@ -35,6 +61,7 @@ export default function App() {
   useEffect(() => {
     if (status?.status !== "completed") return;
     getLayers(status.job_id).then((payload) => setLayers(payload.layers)).catch((err: Error) => setError(err.message));
+    void listCachedCourses().then(setCachedCourses).catch(() => undefined);
   }, [status?.job_id, status?.status]);
 
   const groups = useMemo(() => {
@@ -69,6 +96,7 @@ export default function App() {
       }
       const payload = await searchCourses(body);
       setResults(payload);
+      setCachedCourses((prev) => mergeCachedCourses(payload.courses, prev));
       if (payload.courses.length === 1) {
         setSelected(payload.courses[0]);
         setName(payload.courses[0].display_name);
@@ -167,9 +195,21 @@ export default function App() {
           </div>
         </div>
         <div className="examples">
-          {EXAMPLES.map((example) => (
+          {cachedCourses.map((course) => (
+            <button
+              key={course.course_id || course.display_name}
+              type="button"
+              className={selected?.course_id && selected.course_id === course.course_id ? "cached selected" : "cached"}
+              title={[course.club_name, course.city, course.state, course.country].filter(Boolean).join(" · ")}
+              onClick={() => pick(course)}
+            >
+              {course.display_name}
+            </button>
+          ))}
+          {EXAMPLES.filter((example) => !cachedCovers(cachedCourses, example)).map((example) => (
             <button
               key={example}
+              type="button"
               onClick={() => {
                 setName(example);
                 void search(example);

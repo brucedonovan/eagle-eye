@@ -4,7 +4,7 @@ import pytest
 from fastapi import HTTPException
 from shapely.geometry import Point, box
 
-from app.api import search_courses
+from app.api import list_cached_courses, search_courses
 from app.config import settings
 from app.pipeline.context import PipelineContext
 from app.pipeline.stages import discovery
@@ -22,7 +22,7 @@ from app.services.course_catalog.providers.golfapi import (
     flatten_club_search,
     parse_coordinates,
 )
-from app.services.geometry import feature_collection, to_feature
+from app.services.geometry import as_geom, feature_collection, to_feature
 
 PEBBLE_CLUBS = {
     "apiRequestsLeft": "777",
@@ -144,6 +144,40 @@ async def test_search_cache_avoids_http(tmp_path):
     assert hits2[0].club_id == hits[0].club_id
 
 
+async def test_list_cached_hits_skips_http(tmp_path):
+    client = GolfApiClient(cache_dir=tmp_path, api_key="test-key", search_ttl_days=30)
+    calls = {"n": 0}
+
+    async def fake_http(path, params):
+        calls["n"] += 1
+        if str(path).startswith("courses/"):
+            return {
+                "courseID": "012141520658891108829",
+                "clubID": "141520610397251566",
+                "clubName": "Pebble Beach Golf Links",
+                "courseName": "Pebble Beach",
+                "latitude": 36.568,
+                "longitude": -121.95,
+                "numHoles": 18,
+                "hasGPS": 1,
+                "timestampUpdated": "1704549296",
+            }
+        return PEBBLE_CLUBS
+
+    client._http_get = fake_http  # type: ignore[method-assign]
+    await client.search_course_hits("pebble beach")
+    await client.get_course("012141520658891108829")
+    cached = client.list_cached_hits()
+    assert {hit.course_name for hit in cached} == {"Pebble Beach", "The Hay"}
+    pebble = next(hit for hit in cached if hit.course_name == "Pebble Beach")
+    assert pebble.lat == 36.568
+    assert pebble.has_gps
+    assert calls["n"] == 2
+    again = client.list_cached_hits()
+    assert len(again) == 2
+    assert calls["n"] == 2
+
+
 def test_fuse_uses_provider_source_not_golfapi():
     osm_pin = to_feature(Point(-9.2515, 38.7141), {"source": "openstreetmap", "osm_id": 1})
     far_pin = to_feature(Point(-9.26, 38.72), {"source": "openstreetmap", "osm_id": 2})
@@ -163,6 +197,21 @@ def test_fuse_uses_provider_source_not_golfapi():
     assert stats["pins_catalog"] == 1
     assert layers["green"]["features"][0]["properties"]["hole"] == 1
     assert layers["hole_centerline"]["features"][0]["properties"]["par"] == 4
+
+
+def test_fuse_dogleg_bends_centerline():
+    layers: dict = {}
+    points = [
+        {"hole": 1, "kind": "tee", "lat": 36.560, "lon": -121.950},
+        {"hole": 1, "kind": "dogleg", "lat": 36.562, "lon": -121.947},
+        {"hole": 1, "kind": "green", "lat": 36.564, "lon": -121.950},
+        {"hole": 1, "kind": "bunker", "lat": 36.563, "lon": -121.949},
+    ]
+    stats = fuse_layers(layers, points, source="fake")
+    assert stats["dogleg_seeds"] == 1
+    assert stats["bunker_seeds"] == 1
+    geom = as_geom(layers["hole_centerline"]["features"][0])
+    assert len(list(geom.coords)) == 3
 
 
 class FakeProvider(CourseCatalogProvider):
@@ -217,6 +266,17 @@ class FakeProvider(CourseCatalogProvider):
             ],
             cached=True,
         )
+
+    def list_cached(self) -> list[CourseHit]:
+        return [
+            CourseHit(
+                provider=self.id,
+                club_id="club-1",
+                club_name="Fake Club",
+                course_id="course-1",
+                course_name="Links",
+            )
+        ]
 
 
 def test_drop_in_provider_is_selectable(monkeypatch):
@@ -330,6 +390,18 @@ async def test_search_uses_catalog_only(monkeypatch):
         assert out.catalog_configured is True
         assert [course.course_id for course in out.courses] == ["course-1"]
         assert all(course.source == "fake" for course in out.courses)
+    finally:
+        PROVIDERS.pop("fake", None)
+
+
+async def test_cached_endpoint_lists_disk_courses(monkeypatch):
+    register_provider("fake", FakeProvider)
+    monkeypatch.setattr(settings, "course_catalog_provider", "fake")
+    try:
+        out = await list_cached_courses()
+        assert out.cached is True
+        assert [course.course_id for course in out.courses] == ["course-1"]
+        assert out.courses[0].display_name
     finally:
         PROVIDERS.pop("fake", None)
 

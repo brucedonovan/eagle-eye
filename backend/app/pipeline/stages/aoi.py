@@ -65,7 +65,8 @@ async def run(ctx: PipelineContext) -> None:
         ctx.quality["catalog_fuse"] = stats
         ctx.log(
             f"{catalog_source} overlay: {stats['pins_catalog']} pins, "
-            f"{stats['tees_added']} tees added, {stats['centerlines_added']} hole lines"
+            f"{stats['tees_added']} tees added, {stats['centerlines_added']} hole lines, "
+            f"{stats['bunker_seeds']} bunker / {stats['water_seeds']} water GPS seeds"
         )
 
     if ctx.course:

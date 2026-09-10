@@ -3,6 +3,7 @@ from shapely.geometry import Point, box
 
 from app.services.geometry import area_m2, as_geom, compactness, feature_collection, iou, to_feature
 from app.services.imagery_segment import (
+    ClassMasks,
     MosaicGeo,
     analyze_mosaic,
     derive_green_fringes,
@@ -12,6 +13,7 @@ from app.services.imagery_segment import (
     fuse_layer,
     refine_osm_greens,
     vegetation_index,
+    vote_class_masks,
 )
 
 
@@ -145,6 +147,55 @@ def test_dual_agree_and_keeps_overlapping_class():
     assert result.backend == "dual_imagery_fusion"
     assert result.polygons.get("green")
     assert result.polygons.get("bunker")
+
+
+def _class_masks(*, bunker: bool) -> ClassMasks:
+    z = np.zeros((4, 4), dtype=bool)
+    sand = z.copy()
+    if bunker:
+        sand[1, 1] = True
+    return ClassMasks(
+        water=z,
+        bunker=sand,
+        green=z,
+        fairway=z,
+        tee=z,
+        soft_grass=z,
+        veg=z.astype(np.float32),
+        hsv=np.zeros((4, 4, 3), np.uint8),
+        lab=np.zeros((4, 4, 3), np.uint8),
+    )
+
+
+def test_vote_two_of_three_mosaics():
+    voted = vote_class_masks(
+        [_class_masks(bunker=True), _class_masks(bunker=False), _class_masks(bunker=True)],
+        min_votes=2,
+    )
+    assert bool(voted.bunker[1, 1]) is True
+    rejected = vote_class_masks(
+        [_class_masks(bunker=True), _class_masks(bunker=False), _class_masks(bunker=False)],
+        min_votes=2,
+    )
+    assert bool(rejected.bunker[1, 1]) is False
+
+
+def test_catalog_gps_seed_adds_bunker_without_second_source():
+    rgb, geo = _synthetic_mosaic()
+    lon, lat = geo.pixel_to_lonlat(58, 58)
+    result = analyze_mosaic(
+        rgb,
+        geo,
+        {},
+        catalog_points=[{"kind": "bunker", "lat": lat, "lon": lon, "hole": 1}],
+    )
+    pairs = result.polygons.get("bunker") or []
+    assert pairs
+    agreed = [bool(props.get("catalog_seeded")) for _geom, props in pairs]
+    assert any(agreed)
+    kept, _ = fuse_layer(None, [geom for geom, _p in pairs], "bunker", agreed=agreed)
+    assert kept
+    assert kept[0]["properties"]["source"] == "imagery"
 
 
 def test_pin_seed_recovers_green():

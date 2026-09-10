@@ -70,6 +70,27 @@ async def search_courses(
     return _catalog_search(query, provider, result, [_from_hit(hit) for hit in result.hits[:40]])
 
 
+@api_router.get("/catalog/cached", response_model=CourseSearchOut)
+async def list_cached_courses() -> CourseSearchOut:
+    try:
+        provider = get_provider()
+    except CatalogError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    if provider is None:
+        raise HTTPException(503, "Course catalog is not configured (missing provider credentials)")
+    hits = provider.list_cached()
+    return CourseSearchOut(
+        query="",
+        source=provider.id,
+        cached=True,
+        catalog_configured=True,
+        catalog_provider=provider.id,
+        provider_title=provider.title,
+        api_requests_left=provider.api_requests_left(),
+        courses=[_from_hit(hit) for hit in hits],
+    )
+
+
 @api_router.post("/course", response_model=JobOut, status_code=202)
 @api_router.post("/segment", response_model=JobOut, status_code=202)
 @api_router.post("/vectorize", response_model=JobOut, status_code=202)

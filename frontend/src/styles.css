@@ -160,6 +160,14 @@ button.ghost:disabled { opacity: 0.5; cursor: wait; }
   font-size: 12px;
   cursor: pointer;
 }
+.examples button.cached {
+  color: var(--text);
+  border-color: #3d6a52;
+}
+.examples button.selected {
+  border-color: var(--accent);
+  color: var(--accent);
+}
 
 .scroll {
   overflow: auto;

@@ -113,3 +113,10 @@ class CourseCatalogProvider(ABC):
         club_id: str | None = None,
         timestamp_updated: int | None = None,
     ) -> CourseRecord: ...
+
+    def list_cached(self) -> list[CourseHit]:
+        """Disk-cached courses that the UI can pick without a search request."""
+        return []
+
+    def api_requests_left(self) -> str | None:
+        return None

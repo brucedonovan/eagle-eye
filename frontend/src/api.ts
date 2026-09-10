@@ -75,6 +75,13 @@ export type CreateCourseBody = {
   catalog_timestamp_updated?: number;
 };
 
+export async function listCachedCourses(): Promise<CourseSearchItem[]> {
+  const res = await fetch(`${BASE}/catalog/cached`);
+  if (!res.ok) return [];
+  const payload = (await res.json()) as CourseSearchOut;
+  return payload.courses ?? [];
+}
+
 export async function searchCourses(body: {
   q: string;
   lat?: number;

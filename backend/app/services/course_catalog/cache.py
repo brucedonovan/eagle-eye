@@ -76,6 +76,21 @@ class DiskJsonCache:
             api_requests_left=str(api_requests_left) if api_requests_left is not None else None,
         )
 
+    def iter_entries(self, bucket: str, *, ttl_days: int | None = None) -> list[dict[str, Any]]:
+        folder = self.root / bucket
+        if not folder.is_dir():
+            return []
+        rows: list[dict[str, Any]] = []
+        for path in folder.glob("*.json"):
+            if path.name.endswith(".tmp") or path.suffix != ".json":
+                continue
+            entry = read_json(path)
+            if not entry or not cache_usable(entry, ttl_days=ttl_days, newer_than=None):
+                continue
+            rows.append(entry)
+        rows.sort(key=lambda row: str(row.get("cached_at") or ""), reverse=True)
+        return rows
+
 
 def params_key(path: str, params: dict[str, Any]) -> str:
     blob = path + "?" + urlencode(sorted((str(k), str(v)) for k, v in params.items()))

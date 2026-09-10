@@ -119,6 +119,28 @@ class GolfApiClient:
         hits.sort(key=lambda hit: _hit_score(hit, query), reverse=True)
         return hits, result
 
+    def list_cached_hits(self, *, limit: int = 24) -> list[CourseHit]:
+        by_id: dict[str, tuple[str, CourseHit]] = {}
+
+        def add(hit: CourseHit, cached_at: str, *, prefer: bool = False) -> None:
+            if not hit.course_id:
+                return
+            prev = by_id.get(hit.course_id)
+            if prev is None or prefer:
+                by_id[hit.course_id] = (cached_at, hit)
+
+        for entry in self.cache.iter_entries("searches", ttl_days=self.search_ttl_days):
+            cached_at = str(entry.get("cached_at") or "")
+            for hit in flatten_club_search(entry.get("payload")):
+                add(hit, cached_at)
+        for entry in self.cache.iter_entries("courses"):
+            cached_at = str(entry.get("cached_at") or "")
+            hit = hit_from_course_payload(entry.get("payload"))
+            if hit:
+                add(hit, cached_at, prefer=True)
+        ranked = sorted(by_id.values(), key=lambda row: row[0], reverse=True)
+        return [hit for _at, hit in ranked[:limit]]
+
     async def load_course_bundle(
         self,
         course_id: str,
@@ -253,6 +275,12 @@ class GolfApiProvider(CourseCatalogProvider):
             api_requests_left=bundle.get("api_requests_left"),
         )
 
+    def list_cached(self) -> list[CourseHit]:
+        return self.client.list_cached_hits()
+
+    def api_requests_left(self) -> str | None:
+        return self.client.last_requests_left()
+
 
 def flatten_club_search(payload: Any) -> list[CourseHit]:
     if not isinstance(payload, dict):
@@ -292,6 +320,32 @@ def flatten_club_search(payload: Any) -> list[CourseHit]:
                 )
             )
     return [hit for hit in hits if hit.course_id]
+
+
+def hit_from_course_payload(payload: Any) -> CourseHit | None:
+    if not isinstance(payload, dict):
+        return None
+    course_id = str(payload.get("courseID") or payload.get("course_id") or "")
+    if not course_id:
+        return None
+    club_name = str(payload.get("clubName") or payload.get("club_name") or "").strip()
+    course_name = str(payload.get("courseName") or payload.get("course_name") or club_name).strip()
+    return CourseHit(
+        provider="golfapi",
+        club_id=str(payload.get("clubID") or payload.get("club_id") or ""),
+        club_name=club_name or "Golf club",
+        course_id=course_id,
+        course_name=course_name or club_name,
+        city=opt_str(payload.get("city")),
+        state=opt_str(payload.get("state")),
+        country=opt_str(payload.get("country") or payload.get("country2")),
+        address=opt_str(payload.get("address")),
+        lat=as_float(payload.get("latitude")),
+        lon=as_float(payload.get("longitude")),
+        num_holes=as_int(payload.get("numHoles") or payload.get("num_holes")) or None,
+        has_gps=truthy(payload.get("hasGPS") or payload.get("has_gps")),
+        timestamp_updated=as_int(payload.get("timestampUpdated")) or None,
+    )
 
 
 def parse_coordinates(payload: Any) -> list[dict[str, Any]]:

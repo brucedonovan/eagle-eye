@@ -1,4 +1,4 @@
-"""CPU imagery analysis fused with OSM priors."""
+"""CPU imagery analysis: OSM prior + catalog GPS seeds + 2-of-3 mosaic vote."""
 
 from __future__ import annotations
 
@@ -53,8 +53,9 @@ FRINGE_WIDTH_M = 3.4
 TREE_CROWN_M2 = (16.0, 320.0)
 TREE_MIN_COMPACT = 0.32
 TREE_DEDUP_M = 8.0
-# Tees / greens / fairways are OSM or hole-graph derived. Imagery may only
-# fill bunkers and water when both mosaics agree. Greens are refined separately.
+# Unseeded imagery may ADD bunkers/water when 2 of 3 mosaics agree.
+# Catalog GPS seeds may add from the primary mosaic alone (location is known).
+# Greens are refined separately from pin crops.
 IMAGERY_ADD_LAYERS = frozenset({"bunker", "water"})
 GREEN_MIN_COMPACT = 0.28
 BUNKER_MIN_COMPACT = 0.22
@@ -448,18 +449,80 @@ def remap_rgb(src_rgb: np.ndarray, src_geo: MosaicGeo, dst_geo: MosaicGeo) -> np
     )
 
 
-def and_class_masks(primary: ClassMasks, secondary: ClassMasks) -> ClassMasks:
+def vote_class_masks(members: list[ClassMasks], min_votes: int) -> ClassMasks:
+    """Keep a class pixel when at least `min_votes` mosaics agree (2-of-2 or 2-of-3)."""
+    primary = members[0]
+
+    def _vote(attr: str) -> np.ndarray:
+        acc = np.zeros(primary.green.shape, np.uint8)
+        for member in members:
+            acc += getattr(member, attr).astype(np.uint8)
+        return acc >= min_votes
+
     return ClassMasks(
-        water=primary.water & secondary.water,
-        bunker=primary.bunker & secondary.bunker,
-        green=primary.green & secondary.green,
-        fairway=primary.fairway & secondary.fairway,
-        tee=primary.tee & secondary.tee,
-        soft_grass=primary.soft_grass & secondary.soft_grass,
+        water=_vote("water"),
+        bunker=_vote("bunker"),
+        green=_vote("green"),
+        fairway=_vote("fairway"),
+        tee=_vote("tee"),
+        soft_grass=_vote("soft_grass"),
         veg=primary.veg,
         hsv=primary.hsv,
         lab=primary.lab,
     )
+
+
+CATALOG_PRIOR_M = {
+    "green": 16.0,
+    "pin": 16.0,
+    "tee": 9.0,
+    "bunker": 12.0,
+    "water": 20.0,
+    "fairway": 14.0,
+}
+CATALOG_KIND_TO_LAYER = {
+    "green": "green",
+    "pin": "green",
+    "tee": "tee",
+    "bunker": "bunker",
+    "water": "water",
+    "fairway": "fairway",
+}
+
+
+def catalog_seed_points(points: list[dict[str, Any]] | None, *kinds: str) -> list[Point]:
+    out: list[Point] = []
+    for point in points or []:
+        if point.get("kind") not in kinds:
+            continue
+        try:
+            lat, lon = float(point["lat"]), float(point["lon"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if -90 <= lat <= 90 and -180 <= lon <= 180:
+            out.append(Point(lon, lat))
+    return out
+
+
+def rasterize_catalog_priors(
+    points: list[dict[str, Any]] | None, geo: MosaicGeo, shape: tuple[int, int]
+) -> dict[str, np.ndarray]:
+    grouped: dict[str, list[BaseGeometry]] = {}
+    for point in points or []:
+        layer = CATALOG_KIND_TO_LAYER.get(str(point.get("kind") or ""))
+        pad = CATALOG_PRIOR_M.get(str(point.get("kind") or ""))
+        if not layer or pad is None:
+            continue
+        try:
+            lat, lon = float(point["lat"]), float(point["lon"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        grouped.setdefault(layer, []).append(buffer_meters(Point(lon, lat), pad))
+    return {lid: rasterize_geoms(geoms, geo, shape) for lid, geoms in grouped.items()}
+
+
+def _near_seed(geom: BaseGeometry, seeds: list[Point], max_m: float) -> bool:
+    return any(distance_meters(geom, seed) <= max_m for seed in seeds)
 
 
 def extract_seeded(
@@ -1298,9 +1361,10 @@ def fuse_layer(
 ) -> tuple[list[dict], list[dict]]:
     """Peg OSM geometry. Never swap an OSM ring for an imagery outline.
 
-    Imagery may ADD a feature only when `layer_id` is bunker/water, `agreed[j]`
-    is True, and the blob does not overlap existing OSM. Greens, tees, and
-    fairways are never invented here.
+    Imagery may ADD a feature only when `layer_id` is bunker/water and either
+    `agreed[j]` is True (2-of-3 mosaics, or a catalog GPS seed) and the blob
+    does not overlap existing OSM. Greens, tees, and fairways are never invented
+    here.
     `contradiction` is ignored: imagery must never delete or downgrade OSM.
     Returns (kept_for_layer, unused_practice_bucket).
     """
@@ -1426,6 +1490,9 @@ def analyze_mosaic(
     pins: list[Point] | None = None,
     second_rgb: np.ndarray | None = None,
     second_geo: MosaicGeo | None = None,
+    temporal_rgb: np.ndarray | None = None,
+    temporal_geo: MosaicGeo | None = None,
+    catalog_points: list[dict[str, Any]] | None = None,
 ) -> AnalysisResult:
     shape = rgb.shape[:2]
     priors = {
@@ -1438,6 +1505,8 @@ def analyze_mosaic(
         for lid in PRIOR_LAYERS
         if osm_layers.get(lid)
     }
+    for lid, mask in rasterize_catalog_priors(catalog_points, geo, shape).items():
+        priors[lid] = priors[lid] | mask if lid in priors else mask
     boundary = None
     if osm_layers.get("boundary"):
         boundary = rasterize_layer(osm_layers.get("boundary"), geo, shape, dilate_px=2)
@@ -1450,21 +1519,31 @@ def analyze_mosaic(
         exclude = np.logical_or.reduce(exclude_parts)
 
     primary_masks = classify_pixels(rgb, priors=priors, boundary=boundary, exclude=exclude)
-    dual_source = False
-    masks = primary_masks
-    if second_rgb is not None:
-        aligned = second_rgb
-        if second_geo is not None and (
+    source_masks = [primary_masks]
+
+    def _align_and_classify(src_rgb: np.ndarray | None, src_geo: MosaicGeo | None) -> ClassMasks | None:
+        if src_rgb is None:
+            return None
+        aligned = src_rgb
+        if src_geo is not None and (
             aligned.shape[:2] != (geo.height, geo.width)
-            or second_geo.west != geo.west
-            or second_geo.zoom != geo.zoom
+            or src_geo.west != geo.west
+            or src_geo.zoom != geo.zoom
         ):
-            aligned = remap_rgb(second_rgb, second_geo, geo)
+            aligned = remap_rgb(src_rgb, src_geo, geo)
         elif aligned.shape[:2] != (int(geo.height), int(geo.width)):
-            aligned = remap_rgb(second_rgb, second_geo or geo, geo)
-        second_masks = classify_pixels(aligned, priors=priors, boundary=boundary, exclude=exclude)
-        masks = and_class_masks(primary_masks, second_masks)
-        dual_source = True
+            aligned = remap_rgb(src_rgb, src_geo or geo, geo)
+        return classify_pixels(aligned, priors=priors, boundary=boundary, exclude=exclude)
+
+    second_masks = _align_and_classify(second_rgb, second_geo)
+    if second_masks is not None:
+        source_masks.append(second_masks)
+    temporal_masks = _align_and_classify(temporal_rgb, temporal_geo)
+    if temporal_masks is not None:
+        source_masks.append(temporal_masks)
+
+    dual_source = len(source_masks) >= 2
+    masks = vote_class_masks(source_masks, min_votes=2) if dual_source else primary_masks
 
     hole_lines = hole_lines or _hole_lines(osm_layers.get("hole_centerline"))
     pins = pins or _points_from_layer(osm_layers.get("pin"))
@@ -1499,11 +1578,37 @@ def analyze_mosaic(
     bunker_polys = mask_to_polygons(
         masks.bunker, geo, min_area_m2=BUNKER_AREA_M2[0], max_area_m2=BUNKER_AREA_M2[1], min_compactness=BUNKER_MIN_COMPACT
     )
+    bunker_seeds = catalog_seed_points(catalog_points, "bunker")
+    if bunker_seeds:
+        bunker_polys = _merge_new(
+            bunker_polys,
+            extract_seeded(
+                primary_masks.bunker,
+                bunker_seeds,
+                geo,
+                radius_m=22.0,
+                min_area_m2=BUNKER_AREA_M2[0],
+                max_area_m2=BUNKER_AREA_M2[1],
+            ),
+        )
     bunker_polys, n_shape = _shape_filter(bunker_polys, "bunker", hole_lines, pins or seeds)
     fusion_stats["imagery_rejected_shape"] += n_shape
     water_polys = mask_to_polygons(
         masks.water, geo, min_area_m2=WATER_AREA_M2[0], max_area_m2=WATER_AREA_M2[1], min_compactness=0.12
     )
+    water_seeds = catalog_seed_points(catalog_points, "water")
+    if water_seeds:
+        water_polys = _merge_new(
+            water_polys,
+            extract_seeded(
+                primary_masks.water,
+                water_seeds,
+                geo,
+                radius_m=28.0,
+                min_area_m2=WATER_AREA_M2[0],
+                max_area_m2=WATER_AREA_M2[1],
+            ),
+        )
 
     tee_polys = _extract_tees(masks.tee, geo, osm_layers, hole_lines, pins or seeds, green_polys)
     tee_polys, n_shape = _shape_filter(tee_polys, "tee", hole_lines, pins or seeds)
@@ -1559,8 +1664,28 @@ def analyze_mosaic(
 
     polygons: dict[str, list[tuple[BaseGeometry, dict[str, Any]]]] = {
         "green": [(g, {"source": "imagery", "golf": "green"}) for g in green_polys],
-        "bunker": [(g, {"source": "imagery", "golf": "bunker"}) for g in bunker_polys],
-        "water": [(g, {"source": "imagery", "golf": "water"}) for g in water_polys],
+        "bunker": [
+            (
+                g,
+                {
+                    "source": "imagery",
+                    "golf": "bunker",
+                    "catalog_seeded": _near_seed(g, bunker_seeds, 18.0),
+                },
+            )
+            for g in bunker_polys
+        ],
+        "water": [
+            (
+                g,
+                {
+                    "source": "imagery",
+                    "golf": "water",
+                    "catalog_seeded": _near_seed(g, water_seeds, 24.0),
+                },
+            )
+            for g in water_polys
+        ],
         "tee": [(g, {"source": "imagery", "golf": "tee"}) for g in tee_polys],
         "fairway": [
             (g, {"source": "imagery", "golf": "fairway", "hole": hole})
@@ -1798,9 +1923,9 @@ def analyze_and_fuse(ctx: Any) -> AnalysisResult:
             second_rgb = None
             second_geo = None
 
-    has_dual = second_rgb is not None
     pins = _points_from_layer(osm_layers.get("pin"))
     temporal_rgb = None
+    temporal_geo = None
     temporal_info = ctx.imagery.get("temporal") or {}
     temporal_path = temporal_info.get("path")
     if temporal_info.get("status") == "ok" and temporal_path and Path(temporal_path).exists():
@@ -1809,16 +1934,21 @@ def analyze_and_fuse(ctx: Any) -> AnalysisResult:
             t_geo = MosaicGeo.from_imagery(temporal_info, t_rgb)
             if t_rgb.shape[:2] == (geo.height, geo.width) and t_geo.west == geo.west:
                 temporal_rgb = t_rgb
+                temporal_geo = t_geo
             else:
                 temporal_rgb = remap_rgb(t_rgb, t_geo, geo)
+                temporal_geo = geo
         except Exception as exc:
             ctx.log(f"Temporal mosaic unreadable ({exc}); pin greens use primary only")
             temporal_rgb = None
+            temporal_geo = None
     pin_greens = extract_pin_greens(rgb, geo, pins, second_rgb=temporal_rgb)
     crop_greens = extract_pin_greens_from_crops(
         (ctx.imagery.get("pin_crops") or {}).get("crops") or []
     )
     pin_greens = _prefer_crop_pin_greens(pin_greens, crop_greens)
+    course = getattr(ctx, "course", None) or {}
+    catalog_points = course.get("catalog_points") or course.get("golfapi_points") or []
     result = analyze_mosaic(
         rgb,
         geo,
@@ -1827,6 +1957,9 @@ def analyze_and_fuse(ctx: Any) -> AnalysisResult:
         pins=pins,
         second_rgb=second_rgb,
         second_geo=second_geo,
+        temporal_rgb=temporal_rgb,
+        temporal_geo=temporal_geo,
+        catalog_points=catalog_points,
     )
     result.pin_greens = pin_greens
 
@@ -1839,12 +1972,13 @@ def analyze_and_fuse(ctx: Any) -> AnalysisResult:
     fusion_stats.setdefault("imagery_rejected_layer", 0)
     fusion_stats.setdefault("osm_refined", 0)
 
+    has_confirm = second_rgb is not None or temporal_rgb is not None
+    n_sources = 1 + int(second_rgb is not None) + int(temporal_rgb is not None)
+
     for layer_id in FUSION_LAYERS:
-        imagery_geoms = [g for g, _p in result.polygons.get(layer_id, [])]
-        agreed = [has_dual] * len(imagery_geoms)
-        if not has_dual:
-            # Single mosaic is never enough to ADD features.
-            agreed = [False] * len(imagery_geoms)
+        pairs = result.polygons.get(layer_id, [])
+        imagery_geoms = [g for g, _p in pairs]
+        agreed = [bool(props.get("catalog_seeded")) or has_confirm for _g, props in pairs]
         kept, _practice = fuse_layer(
             ctx.layers.get(layer_id),
             imagery_geoms,
@@ -1886,13 +2020,14 @@ def analyze_and_fuse(ctx: Any) -> AnalysisResult:
     from app.config import settings
 
     onnx = try_onnx_sam(rgb, settings.segmentation_weights or None)
-    backend = "dual_imagery_fusion" if has_dual else "osm_priority"
+    backend = "dual_imagery_fusion" if n_sources >= 2 else "osm_priority"
     ctx.masks = {
         "backend": backend,
-        "fusion": "osm_refine_dual_agree",
+        "fusion": "osm_catalog_gps_2of3",
         "status": backend,
-        "dual_source": has_dual,
-        "second_source": (second_info.get("source") if has_dual else None),
+        "dual_source": n_sources >= 2,
+        "source_count": n_sources,
+        "second_source": (second_info.get("source") if second_rgb is not None else None),
         "model_weights": settings.segmentation_weights or None,
         "onnx": onnx,
         "geo": geo.to_dict(),
@@ -1900,9 +2035,8 @@ def analyze_and_fuse(ctx: Any) -> AnalysisResult:
         "pixel_counts": result.stats.get("pixels", {}),
         "preview": str(preview) if preview else None,
         "note": (
-            "OSM play features keep their identity. Greens may shrink to a "
-            "pin-seeded imagery outline. Imagery adds require "
-            f"{'Sentinel-2/Clarity dual agreement' if has_dual else 'a second mosaic (none loaded)'}"
+            "OSM polygons stay. golfapi.io GPS seeds missing bunkers/water from the "
+            "primary mosaic. Unseeded imagery adds need 2-of-3 mosaic agreement."
         ),
         "class_masks": result.masks.as_dict() if result.masks is not None else {},
         "fusion_stats": fusion_stats,
@@ -1924,14 +2058,16 @@ def analyze_and_fuse(ctx: Any) -> AnalysisResult:
     ctx.quality["fusion_stats"] = {
         k: v for k, v in fusion_stats.items() if k != "class_masks" and not hasattr(v, "shape")
     }
-    ctx.quality["second_source"] = second_info.get("source") if has_dual else None
+    ctx.quality["second_source"] = second_info.get("source") if second_rgb is not None else None
     ctx.quality["temporal_source"] = temporal_info.get("source")
+    ctx.quality["imagery_source_count"] = n_sources
     ctx.quality["pin_crop_source"] = (ctx.imagery.get("pin_crops") or {}).get("source")
     ctx.quality["pin_greens_recovered"] = len(pin_greens)
     n = result.stats.get("polygons", {})
     ctx.log(
-        f"Segmentation: backend={backend} dual={has_dual} "
+        f"Segmentation: backend={backend} sources={n_sources} "
         f"second={second_info.get('source') or 'none'} "
+        f"temporal={temporal_info.get('source') or 'none'} "
         f"green={n.get('green', 0)} fairway={n.get('fairway', 0)} "
         f"bunker={n.get('bunker', 0)} tee={n.get('tee', 0)} water={n.get('water', 0)} "
         f"osm_kept={fusion_stats.get('osm_kept', 0)} "
