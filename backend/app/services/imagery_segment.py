@@ -1,12 +1,4 @@
-"""CPU imagery analysis fused with OSM priors.
-
-OSM play polygons keep their identity (osm_id) and are never deleted. Greens
-may be tightened or snapped to a pin-seeded imagery outline when the new ring
-is the same putting surface and still holds exactly one pin. A second mosaic (Sentinel-2
-cloudless, else ESRI Clarity) is resampled onto the primary grid; imagery may
-ADD a bunker/water only when both images agree. Default path is HSV/Lab +
-vegetation index + morphology — no GPU/SAM required.
-"""
+"""CPU imagery analysis fused with OSM priors."""
 
 from __future__ import annotations
 
@@ -27,6 +19,7 @@ from app.services.geometry import (
     as_polygons,
     buffer_meters,
     clean_polygon,
+    compactness as _compactness,
     difference_safe,
     distance_meters,
     feature_collection,
@@ -60,8 +53,6 @@ FRINGE_WIDTH_M = 3.4
 TREE_CROWN_M2 = (16.0, 320.0)
 TREE_MIN_COMPACT = 0.32
 TREE_DEDUP_M = 8.0
-# Imagery must never downgrade OSM; kept only as a documented no-op threshold.
-CONTRADICT_FRAC = 0.55
 # Tees / greens / fairways are OSM or hole-graph derived. Imagery may only
 # fill bunkers and water when both mosaics agree. Greens are refined separately.
 IMAGERY_ADD_LAYERS = frozenset({"bunker", "water"})
@@ -199,11 +190,6 @@ class AnalysisResult:
     dual_source: bool = False
     fusion_stats: dict[str, Any] = field(default_factory=dict)
     pin_greens: list[dict[str, Any]] = field(default_factory=list)
-
-
-def _tile_y_to_lat(y: float, zoom: int) -> float:
-    n = 2**zoom
-    return math.degrees(math.atan(math.sinh(math.pi * (1.0 - 2.0 * y / n))))
 
 
 def vegetation_index(rgb: np.ndarray) -> np.ndarray:
@@ -403,17 +389,6 @@ def mask_to_polygons(
                     continue
                 out.append(piece)
     return out
-
-
-def _compactness(geom: BaseGeometry) -> float:
-    try:
-        per = geom.length
-        a = geom.area
-    except Exception:
-        return 0.0
-    if per <= 0 or a <= 0:
-        return 0.0
-    return float(4.0 * math.pi * a / (per * per))
 
 
 def _elongation(geom: BaseGeometry) -> float:

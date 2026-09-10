@@ -1,7 +1,7 @@
 import numpy as np
 from shapely.geometry import Point, box
 
-from app.services.geometry import area_m2, as_geom, feature_collection, iou, to_feature
+from app.services.geometry import area_m2, as_geom, compactness, feature_collection, iou, to_feature
 from app.services.imagery_segment import (
     MosaicGeo,
     analyze_mosaic,
@@ -164,9 +164,7 @@ def test_extract_pin_green_is_compact_and_not_a_circle():
     geom = found[0]["geometry"]
     assert geom.buffer(1e-7).contains(pin) or geom.distance(pin) < 1e-4
     assert 150 <= area_m2(geom) <= 1800
-    from app.services.imagery_segment import _compactness
-
-    assert _compactness(geom) >= 0.50
+    assert compactness(geom) >= 0.50
     # A painted rectangle must not collapse to the 11 m fallback circle.
     circle = pin.buffer(0.0001)
     assert iou(geom, circle) < 0.85

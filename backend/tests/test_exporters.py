@@ -25,7 +25,7 @@ def test_flatten_skips_none_layers(tmp_path: Path, fake_course):
 def test_schema_requires_input():
     from pydantic import ValidationError
 
-    from app.schemas.api import CourseCreate
+    from app.schemas import CourseCreate
 
     try:
         CourseCreate()

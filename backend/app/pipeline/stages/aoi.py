@@ -1,4 +1,4 @@
-"""Stage 2 — AOI generation and OSM vector prior download."""
+"""AOI generation and OSM vector prior download."""
 
 from __future__ import annotations
 
@@ -20,9 +20,7 @@ async def run(ctx: PipelineContext) -> None:
     selected = union_layer(ctx.layers.get("boundary")) if ctx.course.get("_boundary_ready") else None
     if selected is None:
         selected = _pick_named_boundary(layers, ctx.course.get("name") or "")
-    gps_clip = catalog_layers.geom_from_geojson(
-        ctx.course.get("catalog_clip") or ctx.course.get("golfapi_clip")
-    )
+    gps_clip = catalog_layers.geom_from_geojson(_catalog_field(ctx.course, "clip"))
     preferred = catalog_layers.prefer_clip(selected, gps_clip)
     catalog_source = ctx.course.get("catalog_provider") or ctx.course.get("source") or "catalog"
     clip_source = catalog_source if preferred is not None and preferred is gps_clip else "openstreetmap"
@@ -34,7 +32,7 @@ async def run(ctx: PipelineContext) -> None:
                 "features": [
                     {
                         "type": "Feature",
-                        "geometry": ctx.course.get("catalog_clip") or ctx.course.get("golfapi_clip"),
+                        "geometry": _catalog_field(ctx.course, "clip"),
                         "properties": {
                             "name": ctx.course.get("display_name") or ctx.course.get("name"),
                             "source": catalog_source,
@@ -56,12 +54,12 @@ async def run(ctx: PipelineContext) -> None:
         if tight:
             ctx.bbox = expand_bbox(*tight, pad_deg=0.0008)
 
-    points = ctx.course.get("catalog_points") or ctx.course.get("golfapi_points") or []
+    points = _catalog_field(ctx.course, "points") or []
     if points:
         stats = catalog_layers.fuse_layers(
             ctx.layers,
             points,
-            scorecard=ctx.course.get("catalog_scorecard") or ctx.course.get("golfapi_scorecard"),
+            scorecard=_catalog_field(ctx.course, "scorecard"),
             source=catalog_source,
         )
         ctx.quality["catalog_fuse"] = stats
@@ -95,3 +93,7 @@ def _pick_named_boundary(layers: dict, name: str):
             best_score = score
             best = geom
     return best
+
+
+def _catalog_field(course: dict, field: str):
+    return course.get(f"catalog_{field}") or course.get(f"golfapi_{field}")

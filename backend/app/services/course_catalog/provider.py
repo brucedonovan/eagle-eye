@@ -1,39 +1,100 @@
-"""Course catalog provider contract.
+"""Course catalog contract: search + cache-first course detail.
 
-Search, discovery, and OSM fusion talk only to this interface. A vendor API
-(golfapi.io or anything with clubs, courses, scorecards, and GPS) is an adapter.
-
-To drop in another API:
-
-1. Subclass ``CourseCatalogProvider`` in ``providers/<name>.py``.
-2. Map that vendor's JSON onto ``CourseHit`` / ``CourseRecord``
-   (points are ``{hole, kind, lat, lon}`` with kind in green/pin/tee/…).
-3. Register it in ``_ensure_builtins()`` (or call
-   ``register_provider("name", YourProvider)`` at process start).
-4. Set ``COURSE_CATALOG_PROVIDER=name`` and that vendor's credentials.
+Pipeline and search talk only to this interface. A vendor adapter maps its JSON
+onto CourseHit / CourseRecord (points are {hole, kind, lat, lon}).
 """
 
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-
-from app.services.course_catalog.models import CourseRecord, SearchResult
+from dataclasses import dataclass, field
+from typing import Any
 
 
 class CatalogError(RuntimeError):
     pass
 
 
-class CourseCatalogProvider(ABC):
-    """Club/course search + cache-first course detail."""
+def club_course_name(club: str, course: str) -> str:
+    club = (club or "").strip()
+    course = (course or "").strip()
+    if not course or course.lower() == club.lower() or course.lower() in club.lower():
+        return club or course
+    return f"{club} — {course}"
 
+
+@dataclass
+class CourseHit:
+    """One selectable course from a catalog search (a club may own several)."""
+
+    provider: str
+    club_id: str
+    club_name: str
+    course_id: str
+    course_name: str
+    city: str | None = None
+    state: str | None = None
+    country: str | None = None
+    address: str | None = None
+    num_holes: int | None = None
+    has_gps: bool = False
+    distance: float | None = None
+    measure_unit: str | None = None
+    timestamp_updated: int | None = None
+    lat: float | None = None
+    lon: float | None = None
+
+    @property
+    def display_name(self) -> str:
+        return club_course_name(self.club_name, self.course_name)
+
+
+@dataclass
+class CourseRecord:
+    """Full course payload after a cache-first fetch."""
+
+    provider: str
+    course_id: str
+    club_id: str
+    club_name: str
+    course_name: str
+    lat: float | None = None
+    lon: float | None = None
+    country: str | None = None
+    city: str | None = None
+    state: str | None = None
+    address: str | None = None
+    postal_code: str | None = None
+    website: str | None = None
+    telephone: str | None = None
+    num_holes: int | None = None
+    has_gps: bool = False
+    scorecard: dict[str, Any] = field(default_factory=dict)
+    points: list[dict[str, Any]] = field(default_factory=list)
+    cached: bool = False
+    api_requests_left: str | None = None
+
+    @property
+    def display_name(self) -> str:
+        return club_course_name(self.club_name, self.course_name)
+
+
+@dataclass
+class SearchResult:
+    provider: str
+    title: str
+    cached: bool
+    hits: list[CourseHit]
+    api_requests_left: str | None = None
+
+
+class CourseCatalogProvider(ABC):
     id: str
     title: str
 
     @property
     @abstractmethod
-    def configured(self) -> bool:
-        """True when credentials (or local data) are present."""
+    def configured(self) -> bool: ...
 
     @abstractmethod
     async def search(
@@ -41,9 +102,8 @@ class CourseCatalogProvider(ABC):
         query: str,
         *,
         lat: float | None = None,
-        lng: float | None = None,
-    ) -> SearchResult:
-        """Return courses grouped under clubs. Must use disk cache when possible."""
+        lon: float | None = None,
+    ) -> SearchResult: ...
 
     @abstractmethod
     async def load_course(
@@ -52,5 +112,4 @@ class CourseCatalogProvider(ABC):
         *,
         club_id: str | None = None,
         timestamp_updated: int | None = None,
-    ) -> CourseRecord:
-        """Scorecard + GPS. Must not hit the network when a fresh cache exists."""
+    ) -> CourseRecord: ...

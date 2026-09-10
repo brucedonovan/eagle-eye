@@ -1,4 +1,4 @@
-"""Stage 6 — Instance polygons (one feature per bunker, green, tee, …)."""
+"""Instance polygons (one feature per bunker, green, tee, …)."""
 
 from __future__ import annotations
 

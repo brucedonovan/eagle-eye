@@ -1,11 +1,4 @@
-"""Stage 5 — Semantic segmentation.
-
-Hybrid by default: OSM vectors keep their identity (never deleted). Greens may
-be tightened to a pin-seeded imagery outline. Color/texture from the primary
-mosaic is AND-ed with a second public mosaic (Sentinel-2 cloudless). Imagery
-may add a bunker/water only when both images agree. Optional SegFormer / SAM2
-/ ONNX weights refine when present; they are never required.
-"""
+"""Semantic segmentation fused with OSM priors."""
 
 from __future__ import annotations
 

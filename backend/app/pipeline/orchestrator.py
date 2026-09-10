@@ -9,8 +9,8 @@ from sqlalchemy import select
 
 from app.config import settings
 from app.db import SessionLocal
-from app.models.entities import Course, Job, LayerArtifact
-from app.pipeline.context import PIPELINE_STAGES, PipelineContext
+from app.models import Course, Job, LayerArtifact
+from app.pipeline.context import PipelineContext
 from app.pipeline.stages import (
     aoi,
     discovery,
@@ -153,7 +153,3 @@ async def _upsert_course(session: Any, job: Job, ctx: PipelineContext) -> Course
     course.metadata_json = json.dumps(meta, default=str)
     await session.flush()
     return course
-
-
-def stage_names() -> tuple[str, ...]:
-    return PIPELINE_STAGES

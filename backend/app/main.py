@@ -4,7 +4,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app import __version__
-from app.api.router import api_router
+from app.api import api_router
 from app.catalog import LAYERS, MVP_LAYERS, SEMANTIC_CLASSES
 from app.config import settings
 from app.db import init_db

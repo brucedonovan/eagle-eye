@@ -1,14 +1,8 @@
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import Any
 
 from pydantic import BaseModel, Field, model_validator
-
-
-class GeoJSONGeometry(BaseModel):
-    type: str
-    coordinates: Any
-    model_config = {"extra": "allow"}
 
 
 class CourseCreate(BaseModel):
@@ -112,17 +106,3 @@ class StatusOut(JobOut):
     layers: list[LayerOut] = Field(default_factory=list)
     quality: dict[str, Any] = Field(default_factory=dict)
     exports: list[str] = Field(default_factory=list)
-
-
-class DownloadQuery(BaseModel):
-    format: Literal[
-        "geojson",
-        "gpkg",
-        "shp",
-        "kml",
-        "gpx",
-        "wkt",
-        "dxf",
-        "ros_grid",
-    ] = "geojson"
-    layers: list[str] | None = None

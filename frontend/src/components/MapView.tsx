@@ -1,7 +1,7 @@
 import { useEffect, useRef } from "react";
 import maplibregl from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
-import type { LayerOut, StatusOut } from "../types";
+import type { LayerOut, StatusOut } from "../api";
 
 type Props = {
   status: StatusOut | null;
@@ -233,7 +233,7 @@ function numberedPins(layers: Record<string, { type: string; features: unknown[]
   return pins.map((pin) => {
     if (pin.properties?.hole != null) return pin;
     const coords = pin.geometry?.coordinates;
-    if (!coords || pin.geometry?.type !== "Point" || typeof coords[0] !== "number") return pin;
+    if (!coords || pin.geometry?.type !== "Point" || typeof coords[0] !== "number" || typeof coords[1] !== "number") return pin;
     let best: { n: number; d: number } | null = null;
     for (const hole of holes) {
       const line = hole.geometry?.coordinates;

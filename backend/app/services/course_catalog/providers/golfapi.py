@@ -1,4 +1,4 @@
-"""golfapi.io adapter. Other vendors live as siblings of this module."""
+"""golfapi.io catalog adapter."""
 
 from __future__ import annotations
 
@@ -20,8 +20,13 @@ from app.services.course_catalog.cache import (
     params_key,
     truthy,
 )
-from app.services.course_catalog.models import CourseHit, CourseRecord, SearchResult
-from app.services.course_catalog.provider import CatalogError, CourseCatalogProvider
+from app.services.course_catalog.provider import (
+    CatalogError,
+    CourseCatalogProvider,
+    CourseHit,
+    CourseRecord,
+    SearchResult,
+)
 
 
 def _default_cache_dir() -> Path:
@@ -191,9 +196,9 @@ class GolfApiProvider(CourseCatalogProvider):
         query: str,
         *,
         lat: float | None = None,
-        lng: float | None = None,
+        lon: float | None = None,
     ) -> SearchResult:
-        hits, raw = await self.client.search_course_hits(query, lat=lat, lng=lng)
+        hits, raw = await self.client.search_course_hits(query, lat=lat, lng=lon)
         return SearchResult(
             provider=self.id,
             title=self.title,

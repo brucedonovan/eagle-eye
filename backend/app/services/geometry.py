@@ -25,8 +25,8 @@ def as_geom(obj: Any) -> BaseGeometry:
     raise TypeError(f"Cannot convert {type(obj)} to geometry")
 
 
-def clean_polygon(geom: BaseGeometry, min_area_m2: float = 4.0) -> BaseGeometry | None:
-    """Repair, simplify, and drop slivers. Area filter uses degrees² if unprojected."""
+def clean_polygon(geom: BaseGeometry) -> BaseGeometry | None:
+    """Repair, simplify, and drop near-zero slivers."""
     if geom is None or geom.is_empty:
         return None
     repaired = make_valid(geom)
@@ -35,12 +35,8 @@ def clean_polygon(geom: BaseGeometry, min_area_m2: float = 4.0) -> BaseGeometry 
     simplified = repaired.simplify(POLYGON_SIMPLIFY_DEG, preserve_topology=True)
     if simplified.is_empty:
         return None
-    # Geographic coords: ~1e-9 deg² ≈ 10 m² near mid-latitudes; keep tiny tees/bunkers.
     if simplified.area > 0 and simplified.area < 1e-12:
         return None
-    if min_area_m2 and simplified.geom_type in {"Polygon", "MultiPolygon"}:
-        # Caller may pass projected geometries; for WGS84 we only drop near-zero slivers.
-        pass
     return simplified
 
 
@@ -101,6 +97,17 @@ def distance_meters(a: BaseGeometry, b: BaseGeometry) -> float:
     return a.distance(b) * 111_320
 
 
+def compactness(geom: BaseGeometry) -> float:
+    try:
+        per = geom.length
+        area = geom.area
+    except Exception:
+        return 0.0
+    if per <= 0 or area <= 0:
+        return 0.0
+    return float(4.0 * math.pi * area / (per * per))
+
+
 def difference_safe(a: BaseGeometry, b: BaseGeometry) -> BaseGeometry:
     try:
         return make_valid(a.difference(b))
@@ -156,21 +163,18 @@ def as_polygons(geom: BaseGeometry | None) -> list[BaseGeometry]:
     return []
 
 
-def bbox_polygon(west: float, south: float, east: float, north: float) -> BaseGeometry:
-    from shapely.geometry import box
-
-    return box(west, south, east, north)
-
-
 def expand_bbox(
     west: float, south: float, east: float, north: float, pad_deg: float = 0.002
 ) -> tuple[float, float, float, float]:
     return west - pad_deg, south - pad_deg, east + pad_deg, north + pad_deg
 
 
-def lonlat_to_tile(lon: float, lat: float, zoom: int) -> tuple[int, int]:
-    import math
+def tile_y_to_lat(y: float, zoom: int) -> float:
+    n = 2**zoom
+    return math.degrees(math.atan(math.sinh(math.pi * (1.0 - 2.0 * y / n))))
 
+
+def lonlat_to_tile(lon: float, lat: float, zoom: int) -> tuple[int, int]:
     lat = min(max(lat, -85.05112878), 85.05112878)
     n = 2**zoom
     x = int((lon + 180.0) / 360.0 * n)

@@ -1,4 +1,4 @@
-"""Stage 1 — Course discovery from name, coordinates, or AOI."""
+"""Course discovery from name, coordinates, or AOI."""
 
 from __future__ import annotations
 
@@ -227,7 +227,7 @@ async def _snap_to_golf_course(ctx: PipelineContext, name: str) -> None:
         return
     try:
         courses = await overpass.find_golf_courses(float(lon), float(lat), name)
-    except Exception as exc:  # noqa: BLE001 — Overpass/network failures must not abort discovery
+    except Exception as exc:
         ctx.log(f"Golf-course snap skipped: {exc}")
         return
     if not courses:

@@ -1,4 +1,4 @@
-"""Stage 3 — Multi-source imagery download (best available public/licensed)."""
+"""Multi-source imagery download."""
 
 from __future__ import annotations
 

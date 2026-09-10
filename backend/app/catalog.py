@@ -1,8 +1,4 @@
-"""Canonical GIS layer catalog for golf-course digital twins.
-
-Every pipeline stage reads/writes layers by these identifiers so OSM priors,
-imagery segmentation, topology repair, navigation, and exporters stay aligned.
-"""
+"""GIS layer identifiers shared by every pipeline stage."""
 
 from __future__ import annotations
 

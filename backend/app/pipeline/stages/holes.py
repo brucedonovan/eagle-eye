@@ -1,17 +1,7 @@
-"""Stage 7 — Hole identification, tee-to-green centerlines, and fairway fill.
-
-OSM golf=hole ways (with ref) are the centerlines. OSM greens keep their
-identity; segmentation may already have tightened the ring to imagery.
-The hole whose pin sits on a green claims it. Holes with a pin and no OSM
-green may receive a compact pin-seeded imagery outline. Circles are never
-invented. Putting greens move only when OSM tagged them practice. Tees are
-exclusive to the nearest hole start. Fairways are one grass-clipped corridor
-per hole.
-"""
+"""Hole identification, tee-to-green centerlines, and fairway fill."""
 
 from __future__ import annotations
 
-import math
 from typing import Any
 
 from shapely.geometry import LineString, Point, Polygon
@@ -24,6 +14,7 @@ from app.services.geometry import (
     as_polygons,
     buffer_meters,
     clean_polygon,
+    compactness,
     difference_safe,
     distance_meters,
     feature_collection,
@@ -45,7 +36,7 @@ FILL_GREEN_OVERLAP = 0.12
 
 
 async def run(ctx: PipelineContext) -> None:
-    greens = [g for g in _features(ctx, "green") if not _is_tagged_practice({"properties": g["properties"]})]
+    greens = [g for g in _features(ctx, "green") if not _is_practice(g["properties"])]
     tees = _features(ctx, "tee")
     pins = _features(ctx, "pin")
     fairways = geoms_from_fc(ctx.layers.get("fairway"))
@@ -331,17 +322,6 @@ def _pin_green_from_masks(ctx: PipelineContext, pin: Point):
     return clean_polygon(best) if best is not None else None
 
 
-def _compactness(geom) -> float:
-    try:
-        per = geom.length
-        a = geom.area
-    except Exception:
-        return 0.0
-    if per <= 0 or a <= 0:
-        return 0.0
-    return float(4.0 * math.pi * a / (per * per))
-
-
 def _osm_green_union(ctx: PipelineContext):
     parts = []
     for feat in (ctx.layers.get("green") or {}).get("features", []):
@@ -365,7 +345,7 @@ def _accept_pin_green(geom, pin: Point, osm_union) -> bool:
     area = area_m2(cleaned)
     if area < FILL_GREEN_AREA_M2[0] or area > FILL_GREEN_AREA_M2[1]:
         return False
-    if _compactness(cleaned) < FILL_GREEN_MIN_COMPACT:
+    if compactness(cleaned) < FILL_GREEN_MIN_COMPACT:
         return False
     if not (cleaned.buffer(1e-7).contains(pin) or distance_meters(cleaned, pin) < FILL_GREEN_PIN_M):
         return False
@@ -487,8 +467,8 @@ def _nearest_point(pt: Point, features: list[dict]) -> Point | None:
     return best["geom"].centroid if best["geom"].geom_type != "Point" else Point(best["geom"].x, best["geom"].y)
 
 
-def _is_tagged_practice(feat: dict[str, Any]) -> bool:
-    props = feat.get("properties") or {}
+def _is_practice(props: dict[str, Any] | None) -> bool:
+    props = props or {}
     if props.get("practice") is True:
         return True
     golf = str(props.get("golf") or "").lower()
@@ -505,7 +485,7 @@ def _split_practice_greens(ctx: PipelineContext, holes: list[dict[str, Any]]) ->
     for feat in fc.get("features", []):
         props = feat.get("properties") or {}
         ident = props.get("instance_id") or props.get("osm_id")
-        if _is_tagged_practice(feat):
+        if _is_practice(props):
             props = dict(props)
             props["practice"] = True
             practice.append({**feat, "properties": props})
@@ -525,7 +505,7 @@ def _split_practice_greens(ctx: PipelineContext, holes: list[dict[str, Any]]) ->
 def _pair_tees_greens(
     tees: list[dict], greens: list[dict], fairways: list, ctx: PipelineContext
 ) -> list[dict[str, Any]]:
-    greens = [g for g in greens if not _is_tagged_practice({"properties": g.get("properties") or {}})]
+    greens = [g for g in greens if not _is_practice(g.get("properties"))]
     if not greens:
         return []
     pairs: list[tuple[float, dict, dict]] = []

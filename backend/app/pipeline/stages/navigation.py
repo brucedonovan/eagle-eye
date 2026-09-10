@@ -1,4 +1,4 @@
-"""Stage 10 — Robot navigation layers (Nav2-oriented)."""
+"""Robot navigation layers (Nav2-oriented)."""
 
 from __future__ import annotations
 

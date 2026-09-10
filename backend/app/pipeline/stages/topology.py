@@ -1,12 +1,4 @@
-"""Stage 9 — GIS topology rules.
-
-Greens cannot overlap bunkers.
-Water cannot overlap fairways.
-Buildings cannot overlap greens.
-Every hole terminates in exactly one green.
-Every green belongs to one hole.
-Green fringes are derived from the repaired putting surfaces.
-"""
+"""GIS topology: greens vs bunkers, water vs fairways, buildings vs greens."""
 
 from __future__ import annotations
 

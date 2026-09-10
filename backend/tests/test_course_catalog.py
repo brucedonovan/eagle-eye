@@ -3,11 +3,10 @@ from shapely.geometry import Point, box
 from app.config import settings
 from app.pipeline.context import PipelineContext
 from app.pipeline.stages import discovery
-from app.schemas.api import CourseCreate
+from app.schemas import CourseCreate
 from app.services.course_catalog import PROVIDERS, get_provider, register_provider
 from app.services.course_catalog.layers import fuse_layers
-from app.services.course_catalog.models import CourseHit, CourseRecord, SearchResult
-from app.services.course_catalog.provider import CourseCatalogProvider
+from app.services.course_catalog.provider import CourseCatalogProvider, CourseHit, CourseRecord, SearchResult
 from app.services.course_catalog.providers.golfapi import (
     GolfApiClient,
     flatten_club_search,
@@ -160,7 +159,7 @@ class FakeProvider(CourseCatalogProvider):
     def configured(self) -> bool:
         return True
 
-    async def search(self, query: str, *, lat: float | None = None, lng: float | None = None) -> SearchResult:
+    async def search(self, query: str, *, lat: float | None = None, lon: float | None = None) -> SearchResult:
         return SearchResult(
             provider=self.id,
             title=self.title,

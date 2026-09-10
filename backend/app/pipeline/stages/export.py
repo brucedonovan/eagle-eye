@@ -1,4 +1,4 @@
-"""Stage 11 — Persist layers and write export packages."""
+"""Persist layers and write export packages."""
 
 from __future__ import annotations
 

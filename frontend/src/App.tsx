@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { MapView } from "./components/MapView";
-import { createCourse, downloadUrl, getLayers, getStatus, searchCourses } from "./api";
-import type { CourseSearchItem, CourseSearchOut, StatusOut } from "./types";
+import { createCourse, downloadUrl, getLayers, getStatus, searchCourses, type CourseSearchItem, type CourseSearchOut, type CreateCourseBody, type StatusOut } from "./api";
 
 const EXAMPLES = [
   "Pebble Beach Golf Links",
@@ -87,15 +86,7 @@ export default function App() {
     setBusy(true);
     setLayers({});
     try {
-      const body: {
-        name?: string;
-        lat?: number;
-        lon?: number;
-        catalog_provider?: string;
-        catalog_course_id?: string;
-        catalog_club_id?: string;
-        catalog_timestamp_updated?: number;
-      } = {};
+      const body: CreateCourseBody = {};
       if (selected?.course_id && selected.source !== "nominatim") {
         body.catalog_provider = selected.source;
         body.catalog_course_id = selected.course_id;

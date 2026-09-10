@@ -1,9 +1,4 @@
-"""Fuse catalog GPS / scorecard into OSM layers.
-
-Catalog data takes preference for identity (hole numbers, pins, missing tees)
-and for the working AOI when its GPS hull is tighter than a multi-course OSM
-boundary. OSM keeps polygon geometry (greens, bunkers, fairways).
-"""
+"""Fuse catalog GPS and scorecard into OSM layers."""
 
 from __future__ import annotations
 
@@ -45,11 +40,7 @@ def clip_geom_from_points(points: list[dict[str, Any]], pad_m: float = GPS_PAD_M
     if len(pts) == 1:
         return buffer_meters(pts[0], pad_m)
     geom: BaseGeometry = MultiPoint(pts).convex_hull
-    if geom.geom_type == "LineString":
-        geom = buffer_meters(geom, pad_m)
-    else:
-        geom = buffer_meters(geom, pad_m)
-    return geom
+    return buffer_meters(geom, pad_m)
 
 
 def prefer_clip(osm_boundary: BaseGeometry | None, gps_clip: BaseGeometry | None) -> BaseGeometry | None:

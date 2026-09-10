@@ -5,21 +5,6 @@ from pathlib import Path
 from typing import Any
 
 
-PIPELINE_STAGES = (
-    "discovery",
-    "aoi",
-    "imagery",
-    "preprocess",
-    "segmentation",
-    "instances",
-    "holes",
-    "vectorize",
-    "topology",
-    "navigation",
-    "export",
-)
-
-
 @dataclass
 class PipelineContext:
     job_id: str

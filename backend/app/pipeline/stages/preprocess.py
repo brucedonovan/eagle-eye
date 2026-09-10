@@ -1,4 +1,4 @@
-"""Stage 4 — Image preprocessing (normalization, tile bookkeeping)."""
+"""Image preprocessing (normalization, tile bookkeeping)."""
 
 from __future__ import annotations
 

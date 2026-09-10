@@ -1,15 +1,17 @@
-"""Course catalog registry.
-
-Pipeline and search never import a vendor client. They call ``get_provider()``.
-"""
+"""Course catalog registry. Search and discovery call get_provider()."""
 
 from __future__ import annotations
 
 from collections.abc import Callable
 
 from app.config import settings
-from app.services.course_catalog.models import CourseHit, CourseRecord, SearchResult
-from app.services.course_catalog.provider import CatalogError, CourseCatalogProvider
+from app.services.course_catalog.provider import (
+    CatalogError,
+    CourseCatalogProvider,
+    CourseHit,
+    CourseRecord,
+    SearchResult,
+)
 
 ProviderFactory = Callable[[], CourseCatalogProvider]
 
@@ -17,7 +19,6 @@ PROVIDERS: dict[str, ProviderFactory] = {}
 
 
 def register_provider(name: str, factory: ProviderFactory) -> None:
-    """Register a catalog adapter. ``name`` is the COURSE_CATALOG_PROVIDER value."""
     PROVIDERS[name.strip().lower()] = factory
 
 
@@ -26,11 +27,10 @@ def _ensure_builtins() -> None:
         from app.services.course_catalog.providers.golfapi import GolfApiProvider
 
         register_provider("golfapi", GolfApiProvider)
-    # Further adapters: if "foo" not in PROVIDERS: register_provider("foo", FooProvider)
 
 
 def get_provider(name: str | None = None) -> CourseCatalogProvider | None:
-    """Return the active catalog, or None to use OpenStreetMap-only search."""
+    """Return the active catalog, or None for OpenStreetMap-only search."""
     _ensure_builtins()
     key = (name or settings.course_catalog_provider or "golfapi").strip().lower()
     if key in {"", "none", "off", "osm"}:
@@ -41,13 +41,6 @@ def get_provider(name: str | None = None) -> CourseCatalogProvider | None:
         raise CatalogError(f"Unknown course catalog provider {key!r}. Registered: {known}")
     provider = factory()
     return provider if provider.configured else None
-
-
-def configured(name: str | None = None) -> bool:
-    try:
-        return get_provider(name) is not None
-    except CatalogError:
-        return False
 
 
 def status() -> dict:
@@ -86,7 +79,6 @@ __all__ = [
     "CourseHit",
     "CourseRecord",
     "SearchResult",
-    "configured",
     "get_provider",
     "register_provider",
     "status",

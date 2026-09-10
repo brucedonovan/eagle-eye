@@ -96,7 +96,7 @@ def cache_usable(entry: dict[str, Any], *, ttl_days: int | None, newer_than: int
     if not cached_at:
         return False
     try:
-        when = datetime.fromisoformat(str(cached_at).replace("Z", "+00:00"))  # noqa: FURB162 — 3.11 rejects trailing Z
+        when = datetime.fromisoformat(str(cached_at).replace("Z", "+00:00"))
     except ValueError:
         return False
     age = datetime.now(UTC) - when.astimezone(UTC)

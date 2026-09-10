@@ -1,10 +1,4 @@
-"""Multi-source imagery registry.
-
-The course mosaic uses public ESRI World Imagery. Pin-green crops try a
-sharper keyed source first (Google Static, then Mapbox Satellite @2x), then
-ESRI at z19. Nearmap / Maxar / Planet register when keys are present so the
-UI can show them; those APIs are not downloaded yet.
-"""
+"""Imagery source registry and mosaic download."""
 
 from __future__ import annotations
 
@@ -20,7 +14,7 @@ from shapely.geometry import Point
 from shapely.geometry.base import BaseGeometry
 
 from app.config import settings
-from app.services.geometry import lonlat_to_tile
+from app.services.geometry import lonlat_to_tile, tile_y_to_lat
 
 
 @dataclass(frozen=True)
@@ -125,22 +119,14 @@ def _fit_zoom(west: float, south: float, east: float, north: float, max_zoom: in
     return 12
 
 
-def _tile_y_to_lat(y: float, zoom: int) -> float:
-    import math
-
-    n = 2**zoom
-    return math.degrees(math.atan(math.sinh(math.pi * (1.0 - 2.0 * y / n))))
-
-
 def _mosaic_tile_bbox(
     x_min: int, y_min: int, x_max: int, y_max: int, zoom: int
 ) -> tuple[float, float, float, float]:
-    """Geographic extent of an XYZ mosaic (west, south, east, north)."""
     n = 2**zoom
     west = x_min / n * 360.0 - 180.0
     east = (x_max + 1) / n * 360.0 - 180.0
-    north = _tile_y_to_lat(y_min, zoom)
-    south = _tile_y_to_lat(y_max + 1, zoom)
+    north = tile_y_to_lat(y_min, zoom)
+    south = tile_y_to_lat(y_max + 1, zoom)
     return west, south, east, north
 
 

@@ -1,4 +1,4 @@
-"""Stage 8 — Polygon extraction / cleaning for every catalog layer."""
+"""Polygon extraction and cleaning for every catalog layer."""
 
 from __future__ import annotations
 
