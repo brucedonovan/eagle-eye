@@ -10,7 +10,6 @@ from shapely.geometry import LineString, MultiPoint, Point, mapping, shape
 from shapely.geometry.base import BaseGeometry
 
 from app.services.geometry import (
-    area_m2,
     as_geom,
     buffer_meters,
     distance_meters,
@@ -23,7 +22,6 @@ PIN_REPLACE_M = 40.0
 TEE_MATCH_M = 38.0
 TEE_BUFFER_M = 7.0
 GPS_PAD_M = 130.0
-OSM_VS_GPS_AREA_RATIO = 2.2
 
 
 def bbox_from_points(points: list[dict[str, Any]], pad_m: float = GPS_PAD_M) -> tuple[float, float, float, float] | None:
@@ -44,13 +42,12 @@ def clip_geom_from_points(points: list[dict[str, Any]], pad_m: float = GPS_PAD_M
 
 
 def prefer_clip(osm_boundary: BaseGeometry | None, gps_clip: BaseGeometry | None) -> BaseGeometry | None:
-    if gps_clip is None or gps_clip.is_empty:
+    """Catalog GPS hull wins over an OSM club polygon when both exist."""
+    if gps_clip is not None and not gps_clip.is_empty:
+        return gps_clip
+    if osm_boundary is not None and not osm_boundary.is_empty:
         return osm_boundary
-    if osm_boundary is None or osm_boundary.is_empty:
-        return gps_clip
-    if area_m2(osm_boundary) > OSM_VS_GPS_AREA_RATIO * max(area_m2(gps_clip), 1.0):
-        return gps_clip
-    return osm_boundary
+    return None
 
 
 def fuse_layers(
@@ -67,6 +64,7 @@ def fuse_layers(
         "tees_added": 0,
         "greens_numbered": 0,
         "centerlines_added": 0,
+        "greens_dropped": 0,
         "holes_stamped": 0,
         "bunker_seeds": 0,
         "water_seeds": 0,
@@ -88,18 +86,22 @@ def fuse_layers(
     stats["pins_catalog"] = len(pin_pts)
     layers["pin"] = _merge_pins(layers.get("pin"), pin_pts, stats, source=source)
     stats["greens_numbered"] = _stamp_nearest(layers.get("green"), pin_pts, max_m=45.0)
+    if pin_pts:
+        kept, dropped = _keep_catalog_matched(layers.get("green"))
+        if kept is not None:
+            layers["green"] = kept
+        stats["greens_dropped"] = dropped
     stats["tees_added"] = _merge_tees(layers, tee_pts, source=source)
 
+    gps_lines = _centerlines_from_gps(
+        pin_pts, tee_pts, scorecard, source=source, doglegs=doglegs
+    )
     osm_holes = (layers.get("hole_centerline") or {}).get("features") or []
-    if osm_holes:
+    if gps_lines:
+        layers["hole_centerline"] = feature_collection(gps_lines)
+        stats["centerlines_added"] = len(gps_lines)
+    elif osm_holes:
         stats["holes_stamped"] = _stamp_hole_lines(layers["hole_centerline"], pin_pts, scorecard)
-    else:
-        lines = _centerlines_from_gps(
-            pin_pts, tee_pts, scorecard, source=source, doglegs=doglegs
-        )
-        if lines:
-            layers["hole_centerline"] = feature_collection(lines)
-            stats["centerlines_added"] = len(lines)
     return stats
 
 
@@ -135,6 +137,9 @@ def _merge_pins(
             "hole": point.get("hole"),
         }
         feats.append(to_feature(Point(point["lon"], point["lat"]), props))
+    if catalog_pins:
+        stats["pins_osm_kept"] = 0
+        return feature_collection(feats)
     for i, feat in enumerate(osm_feats):
         geom = _try_geom(feat)
         if geom is None:
@@ -173,27 +178,52 @@ def _stamp_nearest(fc: dict[str, Any] | None, pins: list[dict[str, Any]], max_m:
     return stamped
 
 
+def _keep_catalog_matched(fc: dict[str, Any] | None) -> tuple[dict[str, Any] | None, int]:
+    if not fc:
+        return fc, 0
+    kept = []
+    dropped = 0
+    for feat in fc.get("features") or []:
+        props = feat.get("properties") or {}
+        if props.get("catalog_hole") or props.get("hole"):
+            kept.append(feat)
+        else:
+            dropped += 1
+    return feature_collection(kept), dropped
+
+
 def _merge_tees(layers: dict[str, dict[str, Any]], tee_pts: list[dict[str, Any]], *, source: str) -> int:
     existing = list((layers.get("tee") or {}).get("features") or [])
+    if not tee_pts:
+        return 0
+    kept: list[dict[str, Any]] = []
+    used_osm: set[int] = set()
     added = 0
     for point in tee_pts:
         pt = Point(point["lon"], point["lat"])
-        matched = False
-        for feat in existing:
+        match_i = None
+        for i, feat in enumerate(existing):
+            if i in used_osm:
+                continue
             geom = _try_geom(feat)
             if geom is None:
                 continue
             if distance_meters(geom, pt) <= TEE_MATCH_M:
-                props = feat.setdefault("properties", {})
-                if point.get("hole"):
-                    props["hole"] = point["hole"]
-                    props["catalog_hole"] = point["hole"]
-                matched = True
+                match_i = i
                 break
-        if matched:
+        if match_i is not None:
+            used_osm.add(match_i)
+            feat = existing[match_i]
+            props = dict(feat.get("properties") or {})
+            if point.get("hole"):
+                props["hole"] = point["hole"]
+                props["catalog_hole"] = point["hole"]
+            props["geom_source"] = props.get("source") or "openstreetmap"
+            props["source"] = source
+            kept.append({"type": "Feature", "geometry": feat.get("geometry"), "properties": props})
             continue
         poly = buffer_meters(pt, TEE_BUFFER_M)
-        existing.append(
+        kept.append(
             to_feature(
                 poly,
                 {
@@ -204,8 +234,7 @@ def _merge_tees(layers: dict[str, dict[str, Any]], tee_pts: list[dict[str, Any]]
             )
         )
         added += 1
-    if existing:
-        layers["tee"] = feature_collection(existing)
+    layers["tee"] = feature_collection(kept)
     return added
 
 

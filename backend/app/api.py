@@ -71,14 +71,23 @@ async def search_courses(
 
 
 @api_router.get("/catalog/cached", response_model=CourseSearchOut)
-async def list_cached_courses() -> CourseSearchOut:
+async def list_cached_courses(session: AsyncSession = Depends(get_session)) -> CourseSearchOut:
+    """Fully cached golfapi.io course payloads (courses/ on disk), not search hits."""
     try:
         provider = get_provider()
     except CatalogError as exc:
         raise HTTPException(400, str(exc)) from exc
     if provider is None:
         raise HTTPException(503, "Course catalog is not configured (missing provider credentials)")
-    hits = provider.list_cached()
+    rows = (
+        await session.scalars(
+            select(Job)
+            .options(selectinload(Job.course), selectinload(Job.layers))
+            .where(Job.status == "completed")
+            .order_by(Job.updated_at.desc())
+            .limit(80)
+        )
+    ).all()
     return CourseSearchOut(
         query="",
         source=provider.id,
@@ -87,7 +96,7 @@ async def list_cached_courses() -> CourseSearchOut:
         catalog_provider=provider.id,
         provider_title=provider.title,
         api_requests_left=provider.api_requests_left(),
-        courses=[_from_hit(hit) for hit in hits],
+        courses=_chips_from_catalog(provider.list_cached(), rows),
     )
 
 
@@ -300,6 +309,119 @@ def _catalog_search(
         provider_title=provider.title,
         api_requests_left=result.api_requests_left,
         courses=courses,
+    )
+
+
+def _chips_from_catalog(hits: list[CourseHit], jobs: list[Job], *, limit: int = 24) -> list[CourseSearchItem]:
+    job_ids = _latest_job_ids_by_catalog(jobs)
+    items: list[CourseSearchItem] = []
+    seen: set[str] = set()
+    for hit in hits:
+        if not hit.course_id or hit.course_id in seen:
+            continue
+        seen.add(hit.course_id)
+        item = _from_hit(hit)
+        item.job_id = job_ids.get(hit.course_id)
+        items.append(item)
+        if len(items) >= limit:
+            break
+    return items
+
+
+def _latest_job_ids_by_catalog(jobs: list[Job]) -> dict[str, str]:
+    out: dict[str, str] = {}
+    for job in jobs:
+        item = _from_completed_job(job)
+        if item is None or not item.course_id or item.course_id in out:
+            continue
+        out[item.course_id] = job.id
+    return out
+
+
+def _items_from_completed_jobs(jobs: list[Job], *, limit: int = 24) -> list[CourseSearchItem]:
+    items: list[CourseSearchItem] = []
+    seen: set[str] = set()
+    for job in jobs:
+        item = _from_completed_job(job)
+        if item is None:
+            continue
+        key = _vectorized_key(job, item)
+        name_key = f"name:{item.display_name.strip().lower()}"
+        if key in seen or name_key in seen:
+            continue
+        seen.add(key)
+        seen.add(name_key)
+        items.append(item)
+        if len(items) >= limit:
+            break
+    return items
+
+
+def _vectorized_key(job: Job, item: CourseSearchItem) -> str:
+    if item.course_id:
+        return f"catalog:{item.course_id}"
+    osm_id = job.course.osm_id if job.course else None
+    if osm_id:
+        return f"osm:{osm_id}"
+    return f"name:{item.display_name}"
+
+
+def _from_completed_job(job: Job) -> CourseSearchItem | None:
+    if job.status != "completed":
+        return None
+    if not job.layers:
+        return None
+    req = json.loads(job.request_json or "{}") if job.request_json else {}
+    meta: dict = {}
+    if job.course and job.course.metadata_json:
+        try:
+            parsed = json.loads(job.course.metadata_json)
+            if isinstance(parsed, dict):
+                meta = parsed
+        except json.JSONDecodeError:
+            meta = {}
+    result: dict = {}
+    if job.result_json:
+        try:
+            parsed = json.loads(job.result_json)
+            if isinstance(parsed, dict):
+                result = parsed
+        except json.JSONDecodeError:
+            result = {}
+    ctx_course = result.get("course") if isinstance(result.get("course"), dict) else {}
+    display = (
+        (job.course.display_name if job.course else None)
+        or ctx_course.get("display_name")
+        or (job.course.name if job.course else None)
+        or ctx_course.get("name")
+        or req.get("name")
+        or "Vectorized course"
+    )
+    course_id = str(
+        meta.get("catalog_course_id") or req.get("catalog_course_id") or req.get("golfapi_course_id") or ""
+    ).strip() or None
+    club_id = str(
+        meta.get("catalog_club_id") or req.get("catalog_club_id") or req.get("golfapi_club_id") or ""
+    ).strip() or None
+    club_name = str(meta.get("catalog_club_name") or ctx_course.get("catalog_club_name") or display)
+    course_name = str(meta.get("catalog_course_name") or ctx_course.get("catalog_course_name") or display)
+    source = str(meta.get("catalog_provider") or ctx_course.get("catalog_provider") or meta.get("source") or "vectorized")
+    return CourseSearchItem(
+        source=source,
+        club_id=club_id,
+        club_name=club_name,
+        course_id=course_id,
+        course_name=course_name,
+        display_name=str(display),
+        city=meta.get("city") or ctx_course.get("city"),
+        state=meta.get("state") or ctx_course.get("state"),
+        country=(job.course.country if job.course else None) or meta.get("country") or ctx_course.get("country"),
+        address=(job.course.address if job.course else None) or meta.get("address") or ctx_course.get("address"),
+        lat=(job.course.lat if job.course else None) or ctx_course.get("lat"),
+        lon=(job.course.lon if job.course else None) or ctx_course.get("lon"),
+        num_holes=meta.get("catalog_num_holes") or ctx_course.get("catalog_num_holes"),
+        has_gps=bool(meta.get("catalog_has_gps") or ctx_course.get("catalog_has_gps")),
+        job_id=job.id,
     )
 
 

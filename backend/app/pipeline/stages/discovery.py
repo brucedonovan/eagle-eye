@@ -97,7 +97,6 @@ async def _discover_from_catalog_search(
         best.course_id,
         provider_name=provider.id,
         club_id=best.club_id,
-        timestamp_updated=best.timestamp_updated,
     )
 
 
@@ -112,12 +111,8 @@ async def _discover_from_catalog(
     req = ctx.request
     provider = _require_catalog(provider_name)
     club_id = club_id or req.get("catalog_club_id") or req.get("golfapi_club_id")
-    ts = timestamp_updated
-    if ts is None:
-        ts = req.get("catalog_timestamp_updated")
-    if ts is None:
-        ts = req.get("golfapi_timestamp_updated")
-    record = await provider.load_course(course_id, club_id=club_id, timestamp_updated=ts)
+    _ = timestamp_updated  # catalog disk cache is preferred; do not refetch by timestamp
+    record = await provider.load_course(course_id, club_id=club_id)
     lat = record.lat or _float(req.get("lat"))
     lon = record.lon or _float(req.get("lon"))
     if (lat is None or lon is None) and record.points:
@@ -162,13 +157,10 @@ async def _discover_from_catalog(
         f"{record.num_holes or '?'} holes)"
     )
     await _snap_to_golf_course(ctx, display)
-    if gps_bbox and ctx.bbox:
-        osm_span = max(ctx.bbox[2] - ctx.bbox[0], ctx.bbox[3] - ctx.bbox[1])
-        gps_span = max(gps_bbox[2] - gps_bbox[0], gps_bbox[3] - gps_bbox[1])
-        if osm_span > 1.8 * max(gps_span, 1e-6):
-            ctx.bbox = gps_bbox
-            ctx.course["_boundary_ready"] = False
-            ctx.log(f"Using {provider.title} GPS hull as AOI (tighter than OSM club boundary)")
+    if gps_bbox:
+        ctx.bbox = gps_bbox
+        ctx.course["_boundary_ready"] = False
+        ctx.log(f"Using {provider.title} GPS hull as AOI (takes precedence over OSM)")
 
 
 async def _snap_to_golf_course(ctx: PipelineContext, name: str) -> None:

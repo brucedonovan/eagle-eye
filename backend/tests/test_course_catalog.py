@@ -2,15 +2,16 @@ from typing import ClassVar
 
 import pytest
 from fastapi import HTTPException
-from shapely.geometry import Point, box
+from shapely.geometry import LineString, Point, box
 
-from app.api import list_cached_courses, search_courses
+from app.api import _chips_from_catalog, _items_from_completed_jobs, search_courses
+from app.models import Course, Job, LayerArtifact
 from app.config import settings
 from app.pipeline.context import PipelineContext
 from app.pipeline.stages import discovery
 from app.schemas import CourseCreate
 from app.services.course_catalog import PROVIDERS, get_provider, register_provider
-from app.services.course_catalog.layers import fuse_layers
+from app.services.course_catalog.layers import fuse_layers, prefer_clip
 from app.services.course_catalog.provider import (
     CourseCatalogProvider,
     CourseHit,
@@ -86,6 +87,28 @@ def test_parse_coordinates_variants():
     assert c[0]["kind"] == "pin" and c[0]["hole"] == 3
 
 
+def test_parse_golfapi_numeric_poi_codes():
+    payload = {
+        "coordinates": [
+            {"poi": 1, "location": 2, "hole": 1, "latitude": 38.7141, "longitude": -9.2514},
+            {"poi": 1, "location": 1, "hole": 1, "latitude": 38.7140, "longitude": -9.2514},
+            {"poi": 12, "location": 2, "hole": 1, "latitude": 38.7123, "longitude": -9.2538},
+            {"poi": 1, "location": 2, "hole": 10, "latitude": 38.7141, "longitude": -9.2514},
+            {"poi": 2, "location": 1, "hole": 1, "latitude": 38.713, "longitude": -9.252},
+            {"poi": 11, "location": 2, "hole": 1, "latitude": 38.7132, "longitude": -9.2525},
+        ]
+    }
+    pts = parse_coordinates(payload, num_holes=9)
+    by_kind = {(p["kind"], p["hole"]) for p in pts}
+    assert ("pin", 1) in by_kind
+    assert ("green", 1) in by_kind
+    assert ("tee", 1) in by_kind
+    assert ("bunker", 1) in by_kind
+    assert ("fairway", 1) in by_kind
+    assert all(p["hole"] != 10 for p in pts)
+    assert sum(1 for p in pts if p["kind"] == "pin") == 1
+
+
 def test_course_create_maps_legacy_golfapi_id():
     payload = CourseCreate(golfapi_course_id="012141520658891108829")
     assert payload.catalog_course_id == "012141520658891108829"
@@ -113,17 +136,42 @@ async def test_course_detail_is_cached_forever(tmp_path):
     assert second.cached is True
     assert calls["n"] == 1
 
-    async def newer(path, params):
-        calls["n"] += 1
-        return {"courseID": "abc", "timestampUpdated": "20", "hasGPS": "0", "courseName": "X"}
-
-    client._http_get = newer  # type: ignore[method-assign]
     stale = await client.get_course("abc", timestamp_updated=20)
-    assert stale.cached is False
-    assert calls["n"] == 2
-    cached_again = await client.get_course("abc", timestamp_updated=20)
+    assert stale.cached is True
+    assert calls["n"] == 1
+    cached_again = await client.get_course("abc", timestamp_updated=99)
     assert cached_again.cached is True
+    assert calls["n"] == 1
+
+
+async def test_vectorize_reuses_cached_course_and_gps(tmp_path):
+    client = GolfApiClient(cache_dir=tmp_path, api_key="test-key")
+    calls = {"n": 0}
+
+    async def fake_http(path, params):
+        calls["n"] += 1
+        if str(path).startswith("coordinates/"):
+            return {"coordinates": [{"hole": 1, "poi": "green", "latitude": 36.57, "longitude": -121.95}]}
+        return {
+            "courseID": "abc",
+            "clubName": "Pebble",
+            "courseName": "Links",
+            "latitude": 36.568,
+            "longitude": -121.95,
+            "hasGPS": 1,
+            "timestampUpdated": "10",
+        }
+
+    client._http_get = fake_http  # type: ignore[method-assign]
+    first = await client.load_course_bundle("abc", timestamp_updated=10)
+    second = await client.load_course_bundle("abc", timestamp_updated=99)
+    third = await client.load_course_bundle("abc")
+    assert first["course_cached"] is False
+    assert second["course_cached"] is True
+    assert third["course_cached"] is True
+    assert second["coordinates_cached"] is True
     assert calls["n"] == 2
+    assert len(third["points"]) == 1
 
 
 async def test_search_cache_avoids_http(tmp_path):
@@ -140,6 +188,12 @@ async def test_search_cache_avoids_http(tmp_path):
     assert len(hits) == 2
     assert first.cached is False
     assert second.cached is True
+    assert calls["n"] == 1
+    _, cased = await client.search_course_hits("Pebble Beach")
+    assert cased.cached is True
+    assert calls["n"] == 1
+    _, similar = await client.search_course_hits("Pebble Beach Golf Links")
+    assert similar.cached is True
     assert calls["n"] == 1
     assert hits2[0].club_id == hits[0].club_id
 
@@ -166,15 +220,16 @@ async def test_list_cached_hits_skips_http(tmp_path):
 
     client._http_get = fake_http  # type: ignore[method-assign]
     await client.search_course_hits("pebble beach")
+    assert client.list_cached_hits() == []
     await client.get_course("012141520658891108829")
     cached = client.list_cached_hits()
-    assert {hit.course_name for hit in cached} == {"Pebble Beach", "The Hay"}
+    assert {hit.course_name for hit in cached} == {"Pebble Beach"}
     pebble = next(hit for hit in cached if hit.course_name == "Pebble Beach")
     assert pebble.lat == 36.568
     assert pebble.has_gps
     assert calls["n"] == 2
     again = client.list_cached_hits()
-    assert len(again) == 2
+    assert len(again) == 1
     assert calls["n"] == 2
 
 
@@ -192,11 +247,53 @@ def test_fuse_uses_provider_source_not_golfapi():
     stats = fuse_layers(layers, points, scorecard={"pars_men": [4], "indexes_men": [6]}, source="fake")
     pins = layers["pin"]["features"]
     sources = [f["properties"]["source"] for f in pins]
-    assert sources.count("fake") == 1
-    assert "openstreetmap" in sources
+    assert sources == ["fake"]
+    assert stats["pins_osm_kept"] == 0
     assert stats["pins_catalog"] == 1
     assert layers["green"]["features"][0]["properties"]["hole"] == 1
     assert layers["hole_centerline"]["features"][0]["properties"]["par"] == 4
+    assert layers["hole_centerline"]["features"][0]["properties"]["source"] == "fake"
+
+
+def test_fuse_stamps_catalog_source_on_matched_tees():
+    osm_tee = to_feature(
+        box(-9.2540, 38.7121, -9.2536, 38.7125),
+        {"source": "openstreetmap", "osm_id": 7},
+    )
+    layers = {"tee": feature_collection([osm_tee])}
+    fuse_layers(
+        layers,
+        [{"hole": 1, "kind": "tee", "lat": 38.7123, "lon": -9.2538}],
+        source="golfapi",
+    )
+    props = layers["tee"]["features"][0]["properties"]
+    assert props["source"] == "golfapi"
+    assert props["geom_source"] == "openstreetmap"
+    assert props["hole"] == 1
+
+
+def test_gps_centerlines_replace_osm_ways():
+    osm_line = to_feature(
+        LineString([(-121.951, 36.560), (-121.949, 36.564)]),
+        {"source": "openstreetmap", "ref": "9"},
+    )
+    layers = {"hole_centerline": feature_collection([osm_line])}
+    points = [
+        {"hole": 1, "kind": "tee", "lat": 36.560, "lon": -121.950},
+        {"hole": 1, "kind": "green", "lat": 36.564, "lon": -121.950},
+    ]
+    stats = fuse_layers(layers, points, source="fake")
+    assert stats["centerlines_added"] == 1
+    assert layers["hole_centerline"]["features"][0]["properties"]["hole"] == 1
+    assert layers["hole_centerline"]["features"][0]["properties"]["source"] == "fake"
+
+
+def test_prefer_clip_uses_gps_hull():
+    osm = box(-9.5, 38.6, -9.3, 38.8)
+    gps = box(-9.40, 38.71, -9.39, 38.72)
+    chosen = prefer_clip(osm, gps)
+    assert chosen is gps
+    assert prefer_clip(osm, None) is osm
 
 
 def test_fuse_dogleg_bends_centerline():
@@ -394,16 +491,108 @@ async def test_search_uses_catalog_only(monkeypatch):
         PROVIDERS.pop("fake", None)
 
 
-async def test_cached_endpoint_lists_disk_courses(monkeypatch):
-    register_provider("fake", FakeProvider)
-    monkeypatch.setattr(settings, "course_catalog_provider", "fake")
-    try:
-        out = await list_cached_courses()
-        assert out.cached is True
-        assert [course.course_id for course in out.courses] == ["course-1"]
-        assert out.courses[0].display_name
-    finally:
-        PROVIDERS.pop("fake", None)
+def test_chips_from_catalog_cache_attach_vectorized_jobs():
+    hits = [
+        CourseHit(
+            provider="golfapi",
+            club_id="club-1",
+            club_name="Estoril Golf Club",
+            course_id="c-1",
+            course_name="Blue Course",
+            has_gps=True,
+        ),
+        CourseHit(
+            provider="golfapi",
+            club_id="club-1",
+            club_name="Estoril Golf Club",
+            course_id="c-2",
+            course_name="Yellow Course",
+        ),
+    ]
+    done = Job(
+        id="job-estoril",
+        status="completed",
+        request_json='{"catalog_course_id":"c-1"}',
+    )
+    done.course = Course(
+        name="Estoril Golf Club",
+        display_name="Estoril Golf Club — Blue Course",
+        metadata_json='{"catalog_course_id":"c-1"}',
+    )
+    done.layers = [LayerArtifact(job_id=done.id, layer_id="green", feature_count=9)]
+    items = _chips_from_catalog(hits, [done])
+    assert [item.course_id for item in items] == ["c-1", "c-2"]
+    assert items[0].job_id == "job-estoril"
+    assert items[1].job_id is None
+    assert items[1].display_name == "Estoril Golf Club — Yellow Course"
+
+
+def test_cached_chips_use_completed_jobs_not_search_hits():
+    done = Job(
+        id="job-estoril",
+        status="completed",
+        request_json='{"catalog_course_id":"c-1","catalog_club_id":"club-1","name":"Estoril"}',
+        result_json='{"course":{"display_name":"Estoril Palácio Golf Course","catalog_provider":"golfapi","catalog_num_holes":18}}',
+    )
+    done.course = Course(
+        name="Estoril Palácio Golf Course",
+        display_name="Estoril Palácio Golf Course",
+        country="Portugal",
+        lat=38.71,
+        lon=-9.39,
+        metadata_json='{"catalog_course_id":"c-1","catalog_club_id":"club-1","catalog_club_name":"Estoril Palácio","catalog_course_name":"Championship","catalog_has_gps":true}',
+    )
+    done.layers = [LayerArtifact(job_id=done.id, layer_id="green", feature_count=18)]
+
+    search_only = Job(
+        id="job-search-cache",
+        status="queued",
+        request_json='{"catalog_course_id":"c-2","name":"Pebble Beach"}',
+    )
+    search_only.layers = []
+
+    unfinished = Job(id="job-empty", status="completed", request_json="{}", result_json="{}")
+    unfinished.layers = []
+
+    older = Job(
+        id="job-estoril-old",
+        status="completed",
+        request_json='{"catalog_course_id":"c-1","name":"Estoril old"}',
+    )
+    older.course = Course(name="Estoril old", display_name="Estoril old")
+    older.layers = [LayerArtifact(job_id=older.id, layer_id="boundary", feature_count=1)]
+
+    jamor_a = Job(id="job-jamor-a", status="completed", request_json="{}")
+    jamor_a.course = Course(name="Jamor A", display_name="Jamor A", osm_id="123")
+    jamor_a.layers = [LayerArtifact(job_id=jamor_a.id, layer_id="green", feature_count=1)]
+    jamor_b = Job(id="job-jamor-b", status="completed", request_json="{}")
+    jamor_b.course = Course(name="Jamor B", display_name="Jamor B", osm_id="123")
+    jamor_b.layers = [LayerArtifact(job_id=jamor_b.id, layer_id="green", feature_count=1)]
+
+    items = _items_from_completed_jobs([done, search_only, unfinished, older, jamor_a, jamor_b])
+    assert [item.job_id for item in items] == ["job-estoril", "job-jamor-a"]
+    assert items[0].display_name == "Estoril Palácio Golf Course"
+    assert items[0].has_gps is True
+
+
+def test_layer_origin_buckets_api_osm_generated():
+    from app.services.layer_origin import layer_origin
+
+    api = feature_collection([to_feature(Point(-9.25, 38.71), {"source": "golfapi"})])
+    osm = feature_collection([to_feature(box(-9.26, 38.70, -9.25, 38.71), {"source": "openstreetmap"})])
+    generated = feature_collection([to_feature(box(-9.26, 38.70, -9.25, 38.71), {"source": "imagery"})])
+    mixed = feature_collection(
+        [
+            to_feature(Point(-9.25, 38.71), {"source": "golfapi"}),
+            to_feature(Point(-9.251, 38.711), {"source": "openstreetmap"}),
+        ]
+    )
+    assert layer_origin(api) == "api"
+    assert layer_origin(osm) == "osm"
+    assert layer_origin(generated) == "generated"
+    assert layer_origin(mixed) == "mixed"
+    assert layer_origin(feature_collection([])) == "hybrid"
+    assert layer_origin(feature_collection([to_feature(Point(-9.25, 38.71), {})])) == "generated"
 
 
 async def test_search_requires_configured_catalog(monkeypatch):

@@ -24,6 +24,7 @@ from app.pipeline.stages import (
     topology,
     vectorize,
 )
+from app.services.layer_origin import layer_origin
 
 StageFn = Callable[[PipelineContext], Awaitable[None]]
 
@@ -110,7 +111,7 @@ async def _persist_success(job_id: str, ctx: PipelineContext) -> None:
                     layer_id=layer_id,
                     feature_count=len(fc.get("features", [])),
                     geojson_path=str(ctx.layer_dir() / f"{layer_id}.geojson"),
-                    source="hybrid",
+                    source=layer_origin(fc),
                 )
             )
         await session.commit()

@@ -53,8 +53,11 @@ async def run(ctx: PipelineContext) -> None:
             existing.append((geom, feat.get("properties") or {}))
 
     if existing:
-        holes = _from_osm_holes(existing, greens, tees, pins, ctx)
-        ctx.log(f"Hole identification from {len(existing)} OSM hole ways")
+        catalog_lines = [(g, p) for g, p in existing if str(p.get("source") or "") not in {"", "openstreetmap", "osm"}]
+        chosen = catalog_lines or existing
+        holes = _from_osm_holes(chosen, greens, tees, pins, ctx)
+        label = "catalog GPS" if catalog_lines else "OSM"
+        ctx.log(f"Hole identification from {len(chosen)} {label} hole ways")
     else:
         holes = _pair_tees_greens(tees, greens, fairways, ctx)
         ctx.log(f"Hole identification via tee–green pairing ({len(holes)} holes)")

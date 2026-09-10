@@ -78,7 +78,7 @@ class GolfApiClient:
     ) -> CacheResult:
         params: dict[str, Any] = {"page": page}
         if name.strip():
-            params["name"] = name.strip()
+            params["name"] = _norm_query(name)
         if city:
             params["city"] = city
         if country:
@@ -87,24 +87,42 @@ class GolfApiClient:
             params["lat"] = round(float(lat), 5)
             params["lng"] = round(float(lng), 5)
             params["measureUnit"] = "km"
+        cached = self.cache.get("searches", params_key("clubs", params), ttl_days=self.search_ttl_days)
+        if cached:
+            return cached
+        reused = self._reuse_cached_search(name, lat=lat, lng=lng)
+        if reused:
+            self.cache.put(
+                "searches",
+                params_key("clubs", params),
+                reused.payload,
+                path="clubs",
+                params=params,
+                api_requests_left=reused.api_requests_left,
+            )
+            return CacheResult(
+                payload=reused.payload,
+                cached=True,
+                api_requests_left=reused.api_requests_left,
+            )
         return await self._cached_get("clubs", params, bucket="searches", ttl_days=self.search_ttl_days)
 
     async def get_course(self, course_id: str, *, timestamp_updated: int | None = None) -> CacheResult:
+        _ = timestamp_updated
         return await self._cached_get(
             f"courses/{course_id}",
             {},
             bucket="courses",
             cache_id=str(course_id),
-            newer_than=timestamp_updated,
         )
 
     async def get_coordinates(self, course_id: str, *, timestamp_updated: int | None = None) -> CacheResult:
+        _ = timestamp_updated
         return await self._cached_get(
             f"coordinates/{course_id}",
             {},
             bucket="coordinates",
             cache_id=str(course_id),
-            newer_than=timestamp_updated,
         )
 
     async def search_course_hits(
@@ -119,26 +137,41 @@ class GolfApiClient:
         hits.sort(key=lambda hit: _hit_score(hit, query), reverse=True)
         return hits, result
 
-    def list_cached_hits(self, *, limit: int = 24) -> list[CourseHit]:
-        by_id: dict[str, tuple[str, CourseHit]] = {}
-
-        def add(hit: CourseHit, cached_at: str, *, prefer: bool = False) -> None:
-            if not hit.course_id:
-                return
-            prev = by_id.get(hit.course_id)
-            if prev is None or prefer:
-                by_id[hit.course_id] = (cached_at, hit)
-
+    def _reuse_cached_search(
+        self,
+        name: str,
+        *,
+        lat: float | None,
+        lng: float | None,
+    ) -> CacheResult | None:
+        """Reuse a disk search when the query is only a spelling/case variant."""
+        if lat is not None or lng is not None or not name.strip():
+            return None
+        needle = _norm_query(name)
+        if not needle:
+            return None
         for entry in self.cache.iter_entries("searches", ttl_days=self.search_ttl_days):
-            cached_at = str(entry.get("cached_at") or "")
-            for hit in flatten_club_search(entry.get("payload")):
-                add(hit, cached_at)
+            params = entry.get("params") if isinstance(entry.get("params"), dict) else {}
+            cached_name = _norm_query(str(params.get("name") or ""))
+            if not _queries_alias(needle, cached_name):
+                continue
+            payload = entry.get("payload")
+            return CacheResult(
+                payload=payload,
+                cached=True,
+                api_requests_left=entry.get("api_requests_left") or self.last_requests_left(),
+            )
+        return None
+
+    def list_cached_hits(self, *, limit: int = 24) -> list[CourseHit]:
+        """Return chips from full course payloads only — never club-search hits."""
+        ranked: list[tuple[str, CourseHit]] = []
         for entry in self.cache.iter_entries("courses"):
-            cached_at = str(entry.get("cached_at") or "")
             hit = hit_from_course_payload(entry.get("payload"))
-            if hit:
-                add(hit, cached_at, prefer=True)
-        ranked = sorted(by_id.values(), key=lambda row: row[0], reverse=True)
+            if not hit or not hit.course_id:
+                continue
+            ranked.append((str(entry.get("cached_at") or ""), hit))
+        ranked.sort(key=lambda row: row[0], reverse=True)
         return [hit for _at, hit in ranked[:limit]]
 
     async def load_course_bundle(
@@ -147,13 +180,14 @@ class GolfApiClient:
         *,
         timestamp_updated: int | None = None,
     ) -> dict[str, Any]:
-        course = await self.get_course(course_id, timestamp_updated=timestamp_updated)
+        _ = timestamp_updated
+        course = await self.get_course(course_id)
         payload = course.payload if isinstance(course.payload, dict) else {}
         coords: dict[str, Any] | list[Any] = {}
         coords_cached = True
         if truthy(payload.get("hasGPS")) or as_int(payload.get("numCoordinates")) > 0:
             try:
-                coord_res = await self.get_coordinates(course_id, timestamp_updated=timestamp_updated)
+                coord_res = await self.get_coordinates(course_id)
                 coords = coord_res.payload
                 coords_cached = coord_res.cached
             except GolfApiError:
@@ -162,7 +196,7 @@ class GolfApiClient:
         return {
             "course": payload,
             "coordinates": coords,
-            "points": parse_coordinates(coords),
+            "points": parse_coordinates(coords, num_holes=as_int(payload.get("numHoles"))),
             "course_cached": course.cached,
             "coordinates_cached": coords_cached,
             "api_requests_left": course.api_requests_left or self.last_requests_left(),
@@ -179,6 +213,9 @@ class GolfApiClient:
         newer_than: int | None = None,
     ) -> CacheResult:
         key = cache_id or params_key(path, params)
+        # Course/GPS live forever: never invalidate a filled cache to "refresh".
+        if ttl_days is None:
+            newer_than = None
         hit = self.cache.get(bucket, key, ttl_days=ttl_days, newer_than=newer_than)
         if hit:
             return hit
@@ -236,7 +273,7 @@ class GolfApiProvider(CourseCatalogProvider):
         club_id: str | None = None,
         timestamp_updated: int | None = None,
     ) -> CourseRecord:
-        bundle = await self.client.load_course_bundle(course_id, timestamp_updated=timestamp_updated)
+        bundle = await self.client.load_course_bundle(course_id)
         payload = bundle["course"] if isinstance(bundle["course"], dict) else {}
         points = bundle["points"]
         lat = as_float(payload.get("latitude"))
@@ -348,9 +385,10 @@ def hit_from_course_payload(payload: Any) -> CourseHit | None:
     )
 
 
-def parse_coordinates(payload: Any) -> list[dict[str, Any]]:
+def parse_coordinates(payload: Any, *, num_holes: int | None = None) -> list[dict[str, Any]]:
     rows = _coordinate_rows(payload)
     points: list[dict[str, Any]] = []
+    seen: set[tuple[Any, ...]] = set()
     for row in rows:
         if not isinstance(row, dict):
             continue
@@ -358,7 +396,10 @@ def parse_coordinates(payload: Any) -> list[dict[str, Any]]:
         lon = as_float(row.get("longitude") or row.get("lng") or row.get("lon"))
         if lat is None or lon is None:
             continue
-        hole = as_int(row.get("hole") or row.get("holeNumber") or row.get("hole_number") or row.get("no"))
+        hole = _wrap_hole(
+            as_int(row.get("hole") or row.get("holeNumber") or row.get("hole_number") or row.get("no")),
+            num_holes,
+        )
         kind = _poi_kind(
             row.get("poi")
             or row.get("poiType")
@@ -369,6 +410,13 @@ def parse_coordinates(payload: Any) -> list[dict[str, Any]]:
             or row.get("name")
             or ""
         )
+        loc = as_int(row.get("location"))
+        if kind == "green" and loc == 2:
+            kind = "pin"
+        key = (hole, kind, round(lat, 6), round(lon, 6))
+        if key in seen:
+            continue
+        seen.add(key)
         points.append({"hole": hole or None, "kind": kind, "lat": lat, "lon": lon, "raw": row})
     return points
 
@@ -404,6 +452,19 @@ def scorecard_from_course(payload: dict[str, Any]) -> dict[str, Any]:
         "num_holes": as_int(payload.get("numHoles")) or None,
         "tees": tees,
     }
+
+
+def _norm_query(value: str) -> str:
+    return " ".join(value.casefold().split())
+
+
+def _queries_alias(left: str, right: str) -> bool:
+    if not left or not right:
+        return False
+    if left == right:
+        return True
+    shorter, longer = (left, right) if len(left) <= len(right) else (right, left)
+    return longer.startswith(shorter) or (shorter in longer and len(shorter) >= 10)
 
 
 def _hit_score(hit: CourseHit, query: str) -> float:
@@ -465,11 +526,34 @@ _POI_MAP = {
     "dogleg": "dogleg",
 }
 
+# golfapi.io GPS uses numeric POI ids, not names.
+# Spatially: 1=green (location 1/2/3 = front/middle/back), 12=tee, 11=fairway,
+# 2/3=bunker, 4=water.
+_POI_CODES = {
+    "1": "green",
+    "2": "bunker",
+    "3": "bunker",
+    "4": "water",
+    "5": "dogleg",
+    "11": "fairway",
+    "12": "tee",
+}
+
+
+def _wrap_hole(hole: int | None, num_holes: int | None) -> int | None:
+    if hole is None or not num_holes or num_holes < 1:
+        return hole
+    if hole > num_holes:
+        return ((hole - 1) % num_holes) + 1
+    return hole
+
 
 def _poi_kind(raw: Any) -> str:
     text = str(raw or "").strip().lower()
     if not text:
         return "poi"
+    if text in _POI_CODES:
+        return _POI_CODES[text]
     if text in _POI_MAP:
         return _POI_MAP[text]
     for key, kind in _POI_MAP.items():

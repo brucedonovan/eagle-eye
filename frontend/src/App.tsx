@@ -2,24 +2,16 @@ import { useEffect, useMemo, useState } from "react";
 import { MapView } from "./components/MapView";
 import { createCourse, downloadUrl, getLayers, getStatus, listCachedCourses, searchCourses, type CourseSearchItem, type CourseSearchOut, type CreateCourseBody, type StatusOut } from "./api";
 
-const EXAMPLES = [
-  "Pebble Beach Golf Links",
-  "St Andrews Old Course",
-  "Centro Nacional de Formação de Golfe do Jamor",
-];
-
 const FORMATS = ["geojson", "kml", "gpx", "wkt", "dxf", "gpkg", "shp", "ros_grid"] as const;
 
-function mergeCachedCourses(fresh: CourseSearchItem[], prev: CourseSearchItem[]): CourseSearchItem[] {
-  const byId = new Map<string, CourseSearchItem>();
-  for (const course of [...prev, ...fresh]) {
-    const key = course.course_id || course.display_name;
-    byId.set(key, course);
-  }
-  const freshIds = new Set(fresh.map((course) => course.course_id || course.display_name));
-  const rest = [...byId.values()].filter((course) => !freshIds.has(course.course_id || course.display_name));
-  return [...fresh, ...rest];
-}
+type LayerOrigin = "api" | "osm" | "generated" | "mixed";
+
+const ORIGIN_LABEL: Record<LayerOrigin, string> = {
+  api: "API",
+  osm: "OSM",
+  generated: "generated",
+  mixed: "mixed",
+};
 
 function cachedCovers(cached: CourseSearchItem[], example: string): boolean {
   const needle = example.trim().toLowerCase();
@@ -29,6 +21,35 @@ function cachedCovers(cached: CourseSearchItem[], example: string): boolean {
       .map((value) => value.toLowerCase());
     return names.some((name) => name.includes(needle) || needle.includes(name));
   });
+}
+
+function originBucket(raw?: string | null): LayerOrigin {
+  const value = (raw || "").trim().toLowerCase();
+  if (value === "api" || value === "golfapi" || value === "catalog" || value === "fake") return "api";
+  if (value === "osm" || value === "openstreetmap" || value === "osm_refined") return "osm";
+  if (value === "mixed" || value === "hybrid") return "mixed";
+  return "generated";
+}
+
+function layerOrigin(
+  layerId: string,
+  geojson: Record<string, { features?: unknown[] }>,
+  fallback?: string | null,
+): LayerOrigin {
+  const loaded = Object.prototype.hasOwnProperty.call(geojson, layerId);
+  const kinds = new Set<LayerOrigin>();
+  for (const feature of geojson[layerId]?.features ?? []) {
+    const props = feature && typeof feature === "object" && "properties" in feature
+      ? (feature as { properties?: { source?: string } }).properties
+      : undefined;
+    kinds.add(originBucket(props?.source));
+  }
+  if (kinds.size === 0) {
+    if (!loaded) return originBucket(fallback);
+    return "generated";
+  }
+  if (kinds.size === 1) return [...kinds][0];
+  return "mixed";
 }
 
 export default function App() {
@@ -96,7 +117,6 @@ export default function App() {
       }
       const payload = await searchCourses(body);
       setResults(payload);
-      setCachedCourses((prev) => mergeCachedCourses(payload.courses, prev));
       if (payload.courses.length === 1) {
         setSelected(payload.courses[0]);
         setName(payload.courses[0].display_name);
@@ -115,12 +135,14 @@ export default function App() {
     setLayers({});
     try {
       const body: CreateCourseBody = {};
-      if (selected?.course_id) {
-        body.catalog_provider = selected.source;
-        body.catalog_course_id = selected.course_id;
-        if (selected.club_id) body.catalog_club_id = selected.club_id;
-        if (selected.timestamp_updated) body.catalog_timestamp_updated = selected.timestamp_updated;
-        body.name = selected.display_name;
+      const chosenChip = selected?.course_id
+        ? selected
+        : cachedCourses.find((course) => cachedCovers([course], name.trim()));
+      if (chosenChip?.course_id) {
+        body.catalog_provider = chosenChip.source;
+        body.catalog_course_id = chosenChip.course_id;
+        if (chosenChip.club_id) body.catalog_club_id = chosenChip.club_id;
+        body.name = chosenChip.display_name;
       } else {
         const chosen = name.trim();
         if (lat && lon) {
@@ -148,6 +170,18 @@ export default function App() {
     if (course.lon != null) setLon(String(course.lon));
   }
 
+  async function openVectorized(course: CourseSearchItem) {
+    pick(course);
+    if (!course.job_id) return;
+    setError(null);
+    try {
+      const next = await getStatus(course.job_id);
+      setStatus(next);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not load vectorized course");
+    }
+  }
+
   function toggle(id: string) {
     setHidden((prev) => {
       const next = new Set(prev);
@@ -170,7 +204,7 @@ export default function App() {
       <aside className="sidebar">
         <div className="brand">
           <h1>Eagle Eye</h1>
-          <p>Search golfapi.io, pick a course, then vectorize. Scorecards and GPS are cached; OSM supplies playable polygons.</p>
+          <p>Chips are fully cached golfapi.io course payloads. Search results stay in the list until a course is fetched.</p>
         </div>
         <div className="search">
           <label htmlFor="course">Course or club name</label>
@@ -194,31 +228,32 @@ export default function App() {
             </button>
           </div>
         </div>
-        <div className="examples">
-          {cachedCourses.map((course) => (
-            <button
-              key={course.course_id || course.display_name}
-              type="button"
-              className={selected?.course_id && selected.course_id === course.course_id ? "cached selected" : "cached"}
-              title={[course.club_name, course.city, course.state, course.country].filter(Boolean).join(" · ")}
-              onClick={() => pick(course)}
-            >
-              {course.display_name}
-            </button>
-          ))}
-          {EXAMPLES.filter((example) => !cachedCovers(cachedCourses, example)).map((example) => (
-            <button
-              key={example}
-              type="button"
-              onClick={() => {
-                setName(example);
-                void search(example);
-              }}
-            >
-              {example}
-            </button>
-          ))}
-        </div>
+        {cachedCourses.length > 0 && (
+          <div className="examples">
+            {cachedCourses.map((course) => (
+              <button
+                key={course.job_id || course.course_id || course.display_name}
+                type="button"
+                className={
+                  (selected?.job_id && selected.job_id === course.job_id)
+                  || (selected?.course_id && selected.course_id === course.course_id)
+                    ? "cached selected"
+                    : "cached"
+                }
+                title={[
+                  course.job_id ? "Vectorized" : "Cached catalog",
+                  course.club_name,
+                  course.city,
+                  course.state,
+                  course.country,
+                ].filter(Boolean).join(" · ")}
+                onClick={() => void openVectorized(course)}
+              >
+                {course.display_name}
+              </button>
+            ))}
+          </div>
+        )}
         <div className="scroll">
           {error && <div className="card error">{error}</div>}
           {results && (
@@ -291,17 +326,28 @@ export default function App() {
                   <button type="button" onClick={showAll}>Show all</button>
                 </div>
               </div>
+              <div className="layer-origin-legend" title="Polygon and POI source">
+                <span className="origin-api">API</span>
+                <span className="origin-osm">OSM</span>
+                <span className="origin-generated">generated</span>
+                <span className="origin-mixed">mixed</span>
+              </div>
               {Object.entries(groups).map(([group, items]) => (
                 <div key={group}>
                   <div className="meta" style={{ margin: "8px 0 4px", textTransform: "uppercase", letterSpacing: "0.06em" }}>{group}</div>
-                  {items.map((layer) => (
-                    <div className="layer" key={layer.layer_id}>
-                      <span className="swatch" style={{ background: layer.color }} />
-                      <span>{layer.title}</span>
-                      <span className="count">{layer.feature_count}</span>
-                      <button onClick={() => toggle(layer.layer_id)}>{hidden.has(layer.layer_id) ? "Show" : "Hide"}</button>
-                    </div>
-                  ))}
+                  {items.map((layer) => {
+                    const origin = layerOrigin(layer.layer_id, layers, layer.source);
+                    return (
+                      <div className="layer" key={layer.layer_id}>
+                        <span className="swatch" style={{ background: layer.color }} />
+                        <span className={`layer-title origin-${origin}`} title={ORIGIN_LABEL[origin]}>
+                          {layer.title}
+                        </span>
+                        <span className="count">{layer.feature_count}</span>
+                        <button onClick={() => toggle(layer.layer_id)}>{hidden.has(layer.layer_id) ? "Show" : "Hide"}</button>
+                      </div>
+                    );
+                  })}
                 </div>
               ))}
             </div>

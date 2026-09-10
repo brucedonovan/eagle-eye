@@ -52,6 +52,7 @@ export type CourseSearchItem = {
   has_gps?: boolean;
   distance_km?: number | null;
   timestamp_updated?: number | null;
+  job_id?: string | null;
 };
 
 export type CourseSearchOut = {

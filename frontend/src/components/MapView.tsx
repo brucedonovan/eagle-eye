@@ -81,7 +81,7 @@ export function MapView({ status, layers, hidden }: Props) {
     if (!map) return;
     const apply = () => {
       paintLayers(map, status, layers, hidden, fittedJob);
-      syncPinMarkers(map, layers, hidden, pinMarkers);
+      syncHoleMarkers(map, layers, hidden, pinMarkers);
     };
     if (!map.isStyleLoaded()) {
       map.once("load", apply);
@@ -98,6 +98,7 @@ export function MapView({ status, layers, hidden }: Props) {
           <strong>{status.course.display_name || status.course.name}</strong>
           {status.course.country && <span>{status.course.country}</span>}
           {status.course.address && <span>{status.course.address}</span>}
+          <Scorecard layers={layers} />
         </div>
       )}
     </div>
@@ -200,11 +201,45 @@ function paintLayers(
 }
 
 type GeoFeat = {
-  geometry?: { type?: string; coordinates?: number[] | number[][] };
+  geometry?: { type?: string; coordinates?: unknown };
   properties?: Record<string, unknown>;
 };
 
-function syncPinMarkers(
+type HoleCard = {
+  hole: number;
+  par?: number;
+  si?: number;
+  tee?: [number, number];
+  green?: [number, number];
+  mid?: [number, number];
+};
+
+function Scorecard({ layers }: { layers: Record<string, { type: string; features: unknown[] }> }) {
+  const holes = holeCards(layers);
+  if (!holes.length) return null;
+  const totalPar = holes.reduce((sum, hole) => sum + (hole.par ?? 0), 0);
+  const withPar = holes.filter((hole) => hole.par != null).length;
+  return (
+    <>
+      <div className="scorecard">
+        {holes.map((hole) => (
+          <div className="sc-hole" key={hole.hole}>
+            <b>{hole.hole}</b>
+            <em>{hole.par != null ? `Par ${hole.par}` : "—"}</em>
+            {hole.si != null ? <small>SI {hole.si}</small> : null}
+          </div>
+        ))}
+      </div>
+      {withPar > 0 && (
+        <div className="sc-total">
+          {holes.length} holes · par {totalPar}
+        </div>
+      )}
+    </>
+  );
+}
+
+function syncHoleMarkers(
   map: maplibregl.Map,
   layers: Record<string, { type: string; features: unknown[] }>,
   hidden: Set<string>,
@@ -212,19 +247,76 @@ function syncPinMarkers(
 ) {
   for (const marker of pinMarkers.current) marker.remove();
   pinMarkers.current = [];
-  if (hidden.has("pin")) return;
+  const showGreen = !hidden.has("pin") || !hidden.has("hole_centerline");
+  const showFairway = !hidden.has("hole_centerline");
+  if (!showGreen && !showFairway) return;
+
+  const pinByHole = new Map<number, [number, number]>();
   for (const pin of numberedPins(layers)) {
-    const hole = pin.properties?.hole;
-    const coords = pin.geometry?.coordinates;
-    if (hole == null || !Array.isArray(coords) || coords.length < 2) continue;
-    if (typeof coords[0] !== "number" || typeof coords[1] !== "number") continue;
-    const el = document.createElement("div");
-    el.className = "pin-num";
-    el.textContent = String(hole);
-    pinMarkers.current.push(
-      new maplibregl.Marker({ element: el, anchor: "center" }).setLngLat([coords[0], coords[1]]).addTo(map),
-    );
+    const hole = Number(pin.properties?.hole);
+    const coords = asLngLat(pin.geometry?.coordinates);
+    if (!Number.isFinite(hole) || !coords) continue;
+    pinByHole.set(hole, coords);
   }
+
+  for (const hole of holeCards(layers)) {
+    const green = pinByHole.get(hole.hole) ?? hole.green;
+    if (showGreen && green) {
+      pinMarkers.current.push(badgeMarker(green, "green", hole));
+    }
+    if (showFairway && hole.tee && (!green || distLngLat(hole.tee, green) > 0.00012)) {
+      pinMarkers.current.push(badgeMarker(hole.tee, "tee", hole));
+    }
+    if (showFairway && hole.mid && hole.par != null) {
+      pinMarkers.current.push(parMarker(hole.mid, hole));
+    }
+  }
+  for (const marker of pinMarkers.current) marker.addTo(map);
+}
+
+function badgeMarker(lngLat: [number, number], kind: "green" | "tee", hole: HoleCard) {
+  const el = document.createElement("div");
+  el.className = kind === "tee" ? "hole-badge tee" : "hole-badge";
+  const num = document.createElement("b");
+  num.textContent = kind === "tee" ? `T${hole.hole}` : String(hole.hole);
+  el.append(num);
+  if (kind === "green" && hole.par != null) {
+    const par = document.createElement("small");
+    par.textContent = `Par ${hole.par}`;
+    el.append(par);
+  }
+  return new maplibregl.Marker({ element: el, anchor: "center" }).setLngLat(lngLat);
+}
+
+function parMarker(lngLat: [number, number], hole: HoleCard) {
+  const el = document.createElement("div");
+  el.className = "hole-par";
+  el.textContent = hole.si != null ? `H${hole.hole} · Par ${hole.par} · SI ${hole.si}` : `H${hole.hole} · Par ${hole.par}`;
+  return new maplibregl.Marker({ element: el, anchor: "center" }).setLngLat(lngLat);
+}
+
+function holeCards(layers: Record<string, { type: string; features: unknown[] }>): HoleCard[] {
+  const byHole = new Map<number, HoleCard>();
+  for (const feat of (layers.hole_centerline?.features ?? []) as GeoFeat[]) {
+    const n = Number(feat.properties?.hole ?? feat.properties?.ref);
+    if (!Number.isFinite(n) || n < 1) continue;
+    const line = lineCoords(feat.geometry);
+    if (!line || line.length < 2) continue;
+    const tee = line[0];
+    const green = line[line.length - 1];
+    const mid = line[Math.floor(line.length / 2)] ?? midpoint(tee, green);
+    const par = numProp(feat.properties, "par");
+    const si = numProp(feat.properties, "stroke_index");
+    byHole.set(n, { hole: n, par, si, tee, green, mid });
+  }
+  for (const pin of numberedPins(layers)) {
+    const n = Number(pin.properties?.hole);
+    const coords = asLngLat(pin.geometry?.coordinates);
+    if (!Number.isFinite(n) || !coords) continue;
+    const prev = byHole.get(n) ?? { hole: n };
+    byHole.set(n, { ...prev, green: coords, par: prev.par ?? numProp(pin.properties, "par"), si: prev.si ?? numProp(pin.properties, "stroke_index") });
+  }
+  return [...byHole.values()].sort((a, b) => a.hole - b.hole);
 }
 
 function numberedPins(layers: Record<string, { type: string; features: unknown[] }>): GeoFeat[] {
@@ -232,18 +324,15 @@ function numberedPins(layers: Record<string, { type: string; features: unknown[]
   const holes = (layers.hole_centerline?.features ?? []) as GeoFeat[];
   return pins.map((pin) => {
     if (pin.properties?.hole != null) return pin;
-    const coords = pin.geometry?.coordinates;
-    if (!coords || pin.geometry?.type !== "Point" || typeof coords[0] !== "number" || typeof coords[1] !== "number") return pin;
+    const coords = asLngLat(pin.geometry?.coordinates);
+    if (!coords) return pin;
     let best: { n: number; d: number } | null = null;
     for (const hole of holes) {
-      const line = hole.geometry?.coordinates;
+      const line = lineCoords(hole.geometry);
       const n = Number(hole.properties?.hole);
-      if (!Array.isArray(line) || !Number.isFinite(n)) continue;
-      const start = line[0];
-      const end = line[line.length - 1];
-      for (const pt of [start, end]) {
-        if (!Array.isArray(pt) || typeof pt[0] !== "number") continue;
-        const d = Math.hypot(pt[0] - coords[0], pt[1] - coords[1]);
+      if (!line || !Number.isFinite(n)) continue;
+      for (const pt of [line[0], line[line.length - 1]]) {
+        const d = distLngLat(pt, coords);
         if (!best || d < best.d) best = { n, d };
       }
     }
@@ -252,4 +341,33 @@ function numberedPins(layers: Record<string, { type: string; features: unknown[]
     }
     return pin;
   });
+}
+
+function lineCoords(geometry?: GeoFeat["geometry"]): [number, number][] | null {
+  if (!geometry || geometry.type !== "LineString" || !Array.isArray(geometry.coordinates)) return null;
+  const out: [number, number][] = [];
+  for (const pt of geometry.coordinates) {
+    const pair = asLngLat(pt);
+    if (pair) out.push(pair);
+  }
+  return out.length >= 2 ? out : null;
+}
+
+function asLngLat(value: unknown): [number, number] | null {
+  if (!Array.isArray(value) || value.length < 2) return null;
+  if (typeof value[0] !== "number" || typeof value[1] !== "number") return null;
+  return [value[0], value[1]];
+}
+
+function midpoint(a: [number, number], b: [number, number]): [number, number] {
+  return [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
+}
+
+function distLngLat(a: [number, number], b: [number, number]): number {
+  return Math.hypot(a[0] - b[0], a[1] - b[1]);
+}
+
+function numProp(props: Record<string, unknown> | undefined, key: string): number | undefined {
+  const value = Number(props?.[key]);
+  return Number.isFinite(value) ? value : undefined;
 }

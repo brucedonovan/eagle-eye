@@ -55,6 +55,7 @@ class CourseSearchItem(BaseModel):
     has_gps: bool = False
     distance_km: float | None = None
     timestamp_updated: int | None = None
+    job_id: str | None = None
 
 
 class CourseSearchOut(BaseModel):
