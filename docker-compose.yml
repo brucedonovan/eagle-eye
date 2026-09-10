@@ -1,0 +1,23 @@
+services:
+  api:
+    build:
+      context: ./backend
+    environment:
+      DATA_DIR: /data
+      DATABASE_URL: sqlite+aiosqlite:////data/eagle_eye.db
+      JOB_BACKEND: local
+      FRONTEND_ORIGIN: http://localhost:8080
+    volumes:
+      - ./data:/data
+    ports:
+      - "8000:8000"
+
+  web:
+    build:
+      context: ./frontend
+    environment:
+      VITE_API_BASE: /api
+    ports:
+      - "8080:80"
+    depends_on:
+      - api
