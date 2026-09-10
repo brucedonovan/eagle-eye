@@ -24,6 +24,7 @@ def register_provider(name: str, factory: ProviderFactory) -> None:
 def _ensure_builtins() -> None:
     if "golfapi" in PROVIDERS:
         return
+# Add a line here when you drop in another adapter under providers/.
     from app.services.course_catalog.providers.golfapi import GolfApiProvider
 
     register_provider("golfapi", GolfApiProvider)
@@ -80,11 +81,11 @@ def status() -> dict:
 
 
 __all__ = [
+    "PROVIDERS",
     "CatalogError",
     "CourseCatalogProvider",
     "CourseHit",
     "CourseRecord",
-    "PROVIDERS",
     "SearchResult",
     "configured",
     "get_provider",

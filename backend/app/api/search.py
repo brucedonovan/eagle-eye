@@ -61,6 +61,7 @@ async def search_courses(
                     query=query,
                     source="nominatim",
                     cached=False,
+                    golfapi_configured=provider.id == "golfapi",
                     catalog_configured=True,
                     catalog_provider=provider.id,
                     provider_title=provider.title,

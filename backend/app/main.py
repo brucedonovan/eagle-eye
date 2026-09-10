@@ -8,7 +8,7 @@ from app.api.router import api_router
 from app.catalog import LAYERS, MVP_LAYERS, SEMANTIC_CLASSES
 from app.config import settings
 from app.db import init_db
-from app.services import golfapi
+from app.services.course_catalog import status as catalog_status
 from app.services.imagery import available_sources
 
 
@@ -53,9 +53,5 @@ async def capabilities() -> dict:
         "imagery_pin_zoom": settings.imagery_pin_zoom,
         "job_backend": settings.job_backend,
         "segmentation_backend": settings.segmentation_backend,
-        "golfapi": {
-            "configured": golfapi.configured(),
-            "search": "/search",
-            "cache": "disk",
-        },
+        "course_catalog": catalog_status(),
     }

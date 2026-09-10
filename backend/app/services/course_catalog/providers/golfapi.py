@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
-import json
 
 import httpx
 
@@ -24,6 +24,14 @@ from app.services.course_catalog.models import CourseHit, CourseRecord, SearchRe
 from app.services.course_catalog.provider import CatalogError, CourseCatalogProvider
 
 
+def _default_cache_dir() -> Path:
+    current = settings.cache_dir / "catalog" / "golfapi"
+    legacy = settings.cache_dir / "golfapi"
+    if not current.exists() and legacy.exists():
+        return legacy
+    return current
+
+
 class GolfApiError(CatalogError):
     pass
 
@@ -37,7 +45,7 @@ class GolfApiClient:
     http_calls: int = field(default=0, init=False)
 
     def __post_init__(self) -> None:
-        root = Path(self.cache_dir or (settings.cache_dir / "catalog" / "golfapi"))
+        root = Path(self.cache_dir or _default_cache_dir())
         self.cache = DiskJsonCache(root)
         self.cache_dir = root
         self.api_key = settings.golfapi_key if self.api_key is None else self.api_key

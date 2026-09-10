@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 from app.pipeline.context import PipelineContext
-from app.services import golfapi_layers, overpass
+from app.services import overpass
+from app.services.course_catalog import layers as catalog_layers
 from app.services.geometry import as_geom, expand_bbox, union_layer
 
 
@@ -19,21 +20,24 @@ async def run(ctx: PipelineContext) -> None:
     selected = union_layer(ctx.layers.get("boundary")) if ctx.course.get("_boundary_ready") else None
     if selected is None:
         selected = _pick_named_boundary(layers, ctx.course.get("name") or "")
-    gps_clip = golfapi_layers.geom_from_geojson(ctx.course.get("golfapi_clip"))
-    preferred = golfapi_layers.prefer_clip(selected, gps_clip)
-    clip_source = "golfapi" if preferred is not None and preferred is gps_clip else "openstreetmap"
+    gps_clip = catalog_layers.geom_from_geojson(
+        ctx.course.get("catalog_clip") or ctx.course.get("golfapi_clip")
+    )
+    preferred = catalog_layers.prefer_clip(selected, gps_clip)
+    catalog_source = ctx.course.get("catalog_provider") or ctx.course.get("source") or "catalog"
+    clip_source = catalog_source if preferred is not None and preferred is gps_clip else "openstreetmap"
     if preferred is not None:
         layers = overpass.clip_layers_to_boundary(layers, preferred)
-        if clip_source == "golfapi":
+        if clip_source != "openstreetmap":
             layers["boundary"] = {
                 "type": "FeatureCollection",
                 "features": [
                     {
                         "type": "Feature",
-                        "geometry": ctx.course.get("golfapi_clip"),
+                        "geometry": ctx.course.get("catalog_clip") or ctx.course.get("golfapi_clip"),
                         "properties": {
                             "name": ctx.course.get("display_name") or ctx.course.get("name"),
-                            "source": "golfapi",
+                            "source": catalog_source,
                             "role": "selected_course",
                         },
                     }
@@ -52,16 +56,17 @@ async def run(ctx: PipelineContext) -> None:
         if tight:
             ctx.bbox = expand_bbox(*tight, pad_deg=0.0008)
 
-    points = ctx.course.get("golfapi_points") or []
+    points = ctx.course.get("catalog_points") or ctx.course.get("golfapi_points") or []
     if points:
-        stats = golfapi_layers.fuse_layers(
+        stats = catalog_layers.fuse_layers(
             ctx.layers,
             points,
-            scorecard=ctx.course.get("golfapi_scorecard"),
+            scorecard=ctx.course.get("catalog_scorecard") or ctx.course.get("golfapi_scorecard"),
+            source=catalog_source,
         )
-        ctx.quality["golfapi_fuse"] = stats
+        ctx.quality["catalog_fuse"] = stats
         ctx.log(
-            f"Golf API overlay: {stats['pins_golfapi']} pins, "
+            f"{catalog_source} overlay: {stats['pins_catalog']} pins, "
             f"{stats['tees_added']} tees added, {stats['centerlines_added']} hole lines"
         )
 
@@ -71,7 +76,7 @@ async def run(ctx: PipelineContext) -> None:
     n_features = sum(len((fc or {}).get("features", [])) for fc in ctx.layers.values())
     clip_note = ""
     if selected is not None:
-        label = ctx.course.get("boundary_name") if clip_source == "openstreetmap" else "Golf API GPS hull"
+        label = ctx.course.get("boundary_name") if clip_source == "openstreetmap" else f"{catalog_source} GPS hull"
         clip_note = f" clipped to {label}"
     ctx.log(f"AOI {ctx.bbox}; ingested {n_features} OSM features across {len(ctx.layers)} layers{clip_note}")
 

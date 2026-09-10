@@ -46,12 +46,14 @@ async def run(ctx: PipelineContext) -> None:
 
     catalog_id = str(req.get("catalog_course_id") or req.get("golfapi_course_id") or "").strip()
     provider_name = req.get("catalog_provider")
-    if catalog_id and get_provider(provider_name) is not None:
+    if catalog_id:
+        if _active_catalog(provider_name) is None:
+            raise RuntimeError("Course catalog is not configured (missing provider credentials)")
         await _discover_from_catalog(ctx, catalog_id, provider_name=provider_name)
         return
 
     name = (req.get("name") or "").strip()
-    if get_provider(provider_name) is not None and name and req.get("lat") is None:
+    if _active_catalog(provider_name) is not None and name and req.get("lat") is None:
         await _discover_from_catalog_search(ctx, name, provider_name=provider_name)
         if ctx.course.get("catalog_course_id"):
             return
@@ -111,6 +113,13 @@ async def run(ctx: PipelineContext) -> None:
     }
     await _snap_to_golf_course(ctx, name)
     ctx.log(f"Discovered {ctx.course.get('boundary_name') or ctx.course['display_name']}")
+
+
+def _active_catalog(name: str | None = None):
+    try:
+        return get_provider(name)
+    except CatalogError as exc:
+        raise RuntimeError(str(exc)) from exc
 
 
 async def _discover_from_catalog_search(

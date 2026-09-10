@@ -23,9 +23,10 @@ export async function createCourse(body: {
   name?: string;
   lat?: number;
   lon?: number;
-  golfapi_course_id?: string;
-  golfapi_club_id?: string;
-  golfapi_timestamp_updated?: number;
+  catalog_provider?: string;
+  catalog_course_id?: string;
+  catalog_club_id?: string;
+  catalog_timestamp_updated?: number;
 }): Promise<{ job_id: string }> {
   const res = await fetch(`${BASE}/course`, {
     method: "POST",

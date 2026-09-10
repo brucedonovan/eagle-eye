@@ -46,7 +46,7 @@ Or: `cp .env.example .env && docker compose up --build` → API on `:8000`, UI o
 
 | Method | Path | Purpose |
 | --- | --- | --- |
-| `GET` | `/search?q=` | Search Golf API clubs (cached) and list their courses |
+| `GET` | `/search?q=` | Search the configured course catalog (cached) and list courses |
 | `POST` | `/course` | Discover + run the full pipeline |
 | `POST` | `/segment` `/vectorize` `/navigation` | Same job entry (stage aliases) |
 | `GET` | `/status/{job_id}` | Stage, progress, quality, layer counts |
@@ -62,7 +62,7 @@ curl -s -X POST http://localhost:8000/course \
 
 ## Architecture notes
 
-**Discovery** searches [Golf API](https://golfapi.io/) clubs first (`GET /clubs`). A club owns one or more courses; the UI lists those courses after you click Search. Selecting a course fetches scorecard + GPS (`GET /courses/{id}`, `GET /coordinates/{id}`) and **caches them on disk forever** so limited API tokens are not spent twice. Nominatim / Overpass still supply `leisure=golf_course` and `golf=*` polygons. Golf API wins for identity (name, hole numbers, pins, scorecard) and for the AOI when its GPS hull is tighter than a multi-course OSM boundary.
+**Discovery** talks to a **course catalog** interface (`CourseCatalogProvider`), not a vendor SDK. [golfapi.io](https://golfapi.io/) is the default adapter (`COURSE_CATALOG_PROVIDER=golfapi`): search is clubs (`GET /clubs`); a club owns nested courses; selecting one fetches scorecard + GPS (`GET /courses/{id}`, `GET /coordinates/{id}`). Course/GPS payloads are **cached on disk forever**; club search is cached for 30 days. Another vendor with clubs, courses, scorecards, and GPS is a drop-in: implement `providers/<name>.py`, `register_provider(...)`, set `COURSE_CATALOG_PROVIDER`. Set the provider to `none` / `osm` for OpenStreetMap-only search. Nominatim / Overpass still supply `leisure=golf_course` and `golf=*` polygons. The catalog wins for identity (name, hole numbers, pins, scorecard) and for the AOI when its GPS hull is tighter than a multi-course OSM boundary.
 
 **Imagery** is a ranked registry (Nearmap / Maxar / Planet / Google / Mapbox when keys exist, otherwise ESRI World Imagery, then Sentinel-2 / USGS). The course mosaic stays on public ESRI. Pins that lack an OSM green get a z19 crop from Google Static or Mapbox Satellite when a key is set, otherwise ESRI at the same zoom.
 

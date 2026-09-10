@@ -90,7 +90,7 @@ async def run(ctx: PipelineContext) -> None:
             "hazard_ids": hole.get("hazards", []),
             "source": hole.get("source", "heuristic"),
         }
-        _apply_golfapi_scorecard(ctx, props, hole["number"])
+        _apply_catalog_scorecard(ctx, props, hole["number"])
         centerlines.append(to_feature(hole["centerline"], props))
         _stamp_hole_number(ctx, "green", hole.get("green_id"), hole["number"])
         _stamp_pin_number(ctx, hole.get("pin"), hole["number"])
@@ -748,6 +748,7 @@ def _grass_union(ctx: PipelineContext):
     if geo is None:
         return None
     import numpy as np
+
     from app.services.imagery_segment import mask_to_polygons
 
     combined = None
@@ -774,8 +775,8 @@ def _parse_ref(value: Any) -> int | None:
     return number if 1 <= number <= 27 else None
 
 
-def _apply_golfapi_scorecard(ctx: PipelineContext, props: dict[str, Any], number: int) -> None:
-    scorecard = (ctx.course or {}).get("golfapi_scorecard") or {}
+def _apply_catalog_scorecard(ctx: PipelineContext, props: dict[str, Any], number: int) -> None:
+    scorecard = (ctx.course or {}).get("catalog_scorecard") or (ctx.course or {}).get("golfapi_scorecard") or {}
     if not scorecard or number < 1:
         return
     idx = number - 1

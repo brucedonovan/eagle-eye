@@ -34,7 +34,7 @@ export type StatusOut = {
 };
 
 export type CourseSearchItem = {
-  source: "golfapi" | "nominatim" | string;
+  source: "nominatim" | string;
   club_id?: string | null;
   club_name: string;
   course_id?: string | null;
@@ -56,7 +56,10 @@ export type CourseSearchOut = {
   query: string;
   source: string;
   cached: boolean;
-  golfapi_configured: boolean;
+  catalog_configured: boolean;
+  catalog_provider?: string | null;
+  provider_title?: string | null;
+  golfapi_configured?: boolean;
   api_requests_left?: string | null;
   warning?: string | null;
   courses: CourseSearchItem[];

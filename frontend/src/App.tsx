@@ -91,14 +91,16 @@ export default function App() {
         name?: string;
         lat?: number;
         lon?: number;
-        golfapi_course_id?: string;
-        golfapi_club_id?: string;
-        golfapi_timestamp_updated?: number;
+        catalog_provider?: string;
+        catalog_course_id?: string;
+        catalog_club_id?: string;
+        catalog_timestamp_updated?: number;
       } = {};
-      if (selected?.source === "golfapi" && selected.course_id) {
-        body.golfapi_course_id = selected.course_id;
-        if (selected.club_id) body.golfapi_club_id = selected.club_id;
-        if (selected.timestamp_updated) body.golfapi_timestamp_updated = selected.timestamp_updated;
+      if (selected?.course_id && selected.source !== "nominatim") {
+        body.catalog_provider = selected.source;
+        body.catalog_course_id = selected.course_id;
+        if (selected.club_id) body.catalog_club_id = selected.club_id;
+        if (selected.timestamp_updated) body.catalog_timestamp_updated = selected.timestamp_updated;
         body.name = selected.display_name;
       } else if (selected?.source === "nominatim") {
         body.name = selected.display_name || name.trim();
@@ -155,7 +157,7 @@ export default function App() {
       <aside className="sidebar">
         <div className="brand">
           <h1>Eagle Eye</h1>
-          <p>Search a club, pick a course, then vectorize. Golf API scorecards and GPS are cached; OSM supplies playable polygons.</p>
+          <p>Search a club, pick a course, then vectorize. Catalog scorecards and GPS are cached; OSM supplies playable polygons.</p>
         </div>
         <div className="search">
           <label htmlFor="course">Course or club name</label>
@@ -199,7 +201,8 @@ export default function App() {
               <h2>Search results</h2>
               <div className="meta">
                 {results.cached ? "Cached · " : ""}
-                {results.source === "golfapi" ? "Golf API clubs" : "OpenStreetMap"}
+                {results.provider_title
+                  || (results.source === "nominatim" ? "OpenStreetMap" : results.source)}
                 {results.api_requests_left ? ` · ${results.api_requests_left} API calls left` : ""}
                 {results.courses.length === 0 ? " · no matches" : ` · ${results.courses.length} courses`}
               </div>
