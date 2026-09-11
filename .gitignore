@@ -24,6 +24,7 @@ frontend/.vite/
 # Data products
 data/jobs/
 data/cache/
+data/osm_training/ 
 *.tif
 *.tiff
 *.gpkg
